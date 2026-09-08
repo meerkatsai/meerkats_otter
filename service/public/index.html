@@ -198,9 +198,12 @@ function taskSummary(taskRef) {
 
 const TD = "border-b border-gray-100 px-3 py-2 align-top";
 
-// event_id -> task_ref, populated as audit pages load. The task router's
-// emitted JSON (task_ref.inline) is already stored on every audit row —
-// this just makes it viewable/clickable instead of only visible via the raw API.
+// event_id -> { taskRef, userQuery }, populated as audit pages load. The
+// task router's emitted JSON (task_ref.inline) is already stored on every
+// audit row — this just makes it viewable/clickable instead of only
+// visible via the raw API. userQuery rides along so the expanded
+// query_json/query_yaml can show it merged in — the raw request right
+// next to the task it produced, without a separate lookup.
 const auditTaskRefs = new Map();
 
 // One cell markup for both query_json and query_yaml columns — same
@@ -279,24 +282,33 @@ function toggleQueryExpand(cell) {
     arrowEl.textContent = "▸";
     return;
   }
-  const taskRef = auditTaskRefs.get(cell.dataset.eventId);
+  const entry = auditTaskRefs.get(cell.dataset.eventId);
   const kind = cell.dataset.kind; // "json" | "yaml"
   summaryEl.classList.remove("truncate");
   arrowEl.textContent = "▾";
   const pre = document.createElement("pre");
   pre.className = "query-full mono mt-1 max-w-[360px] max-h-[240px] overflow-auto rounded border border-gray-200 bg-gray-50 p-2 text-[11px] text-gray-700";
-  // Both columns render the same task_ref.inline (the query envelope) —
-  // just serialized differently, side by side for comparison. YAML uses
-  // js-yaml (same library server.mjs uses for trace_summary.query_yaml),
-  // loaded via CDN; falls back to JSON if that script didn't load.
+  // Both columns render the same object — task_ref.inline (the query
+  // envelope) with user_query merged in as a leading field, when present,
+  // so the raw request and the task it produced are readable together
+  // instead of needing to cross-reference the user_query column. This is
+  // display-only: the underlying task_ref / audit row are never mutated.
+  // YAML uses js-yaml (same library server.mjs uses for
+  // trace_summary.query_yaml), loaded via CDN; falls back to JSON if that
+  // script didn't load.
+  const taskRef = entry?.taskRef;
   if (!taskRef) {
     pre.textContent = "This audit event has no task_ref attached.";
-  } else if (kind === "yaml") {
-    pre.textContent = typeof jsyaml !== "undefined"
-      ? jsyaml.dump(taskRef.inline ?? taskRef)
-      : JSON.stringify(taskRef, null, 2) + "\n\n(js-yaml failed to load — showing JSON)";
   } else {
-    pre.textContent = JSON.stringify(taskRef.inline ?? taskRef, null, 2);
+    const inline = taskRef.inline ?? taskRef;
+    const display = entry.userQuery ? { user_query: entry.userQuery, ...inline } : inline;
+    if (kind === "yaml") {
+      pre.textContent = typeof jsyaml !== "undefined"
+        ? jsyaml.dump(display)
+        : JSON.stringify(display, null, 2) + "\n\n(js-yaml failed to load — showing JSON)";
+    } else {
+      pre.textContent = JSON.stringify(display, null, 2);
+    }
   }
   cell.appendChild(pre);
 }
@@ -328,7 +340,7 @@ async function loadAudit(reset = true) {
   if (reset) { auditCursor = null; $("#audit-rows").innerHTML = ""; }
   const url = `/audit?tenant=${encodeURIComponent(t)}&limit=25` + (auditCursor != null ? `&before=${auditCursor}` : "");
   const r = await fetch(url).then((x) => x.json());
-  r.events.forEach((e) => auditTaskRefs.set(e.event_id, e.task_ref));
+  r.events.forEach((e) => auditTaskRefs.set(e.event_id, { taskRef: e.task_ref, userQuery: e.user_query }));
   $("#audit-rows").insertAdjacentHTML("beforeend", r.events.map(auditRowHtml).join(""));
   auditCursor = r.next_cursor;
   $("#audit-more").classList.toggle("hidden", auditCursor == null);
