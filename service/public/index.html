@@ -5,6 +5,7 @@
 <title>Meerkats DSL</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
@@ -43,7 +44,7 @@
             <th class="whitespace-nowrap px-3 py-2 font-medium">action</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">entity</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">user_query</th>
-            <th class="whitespace-nowrap px-3 py-2 font-medium">query <button id="query-ref-link" class="mono font-normal text-blue-600 underline decoration-dotted hover:text-blue-800" title="open the readable DSL reference">(?)</button></th>
+            <th class="whitespace-nowrap px-3 py-2 font-medium">query_yaml <button id="query-ref-link" class="mono font-normal text-blue-600 underline decoration-dotted hover:text-blue-800" title="open the readable DSL reference">(?)</button></th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">type</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">trace</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">hash</th>
@@ -274,7 +275,18 @@ function toggleQueryExpand(cell) {
   arrowEl.textContent = "▾";
   const pre = document.createElement("pre");
   pre.className = "query-full mono mt-1 max-w-[360px] max-h-[240px] overflow-auto rounded border border-gray-200 bg-gray-50 p-2 text-[11px] text-gray-700";
-  pre.textContent = taskRef ? JSON.stringify(taskRef, null, 2) : "This audit event has no task_ref attached.";
+  // Render task_ref.inline (the query envelope) as YAML — the same
+  // rendering, via the same js-yaml library, that server.mjs computes and
+  // stores in trace_summary.query_yaml for linked traces. Every audit row
+  // with a task_ref gets this, not only rows that happen to have a linked
+  // trace. Falls back to JSON if the CDN script didn't load.
+  if (!taskRef) {
+    pre.textContent = "This audit event has no task_ref attached.";
+  } else if (typeof jsyaml !== "undefined") {
+    pre.textContent = jsyaml.dump(taskRef.inline ?? taskRef);
+  } else {
+    pre.textContent = JSON.stringify(taskRef, null, 2);
+  }
   cell.appendChild(pre);
 }
 
