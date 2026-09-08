@@ -44,6 +44,7 @@
             <th class="whitespace-nowrap px-3 py-2 font-medium">action</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">entity</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">user_query</th>
+            <th class="whitespace-nowrap px-3 py-2 font-medium">query_json</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">query_yaml <button id="query-ref-link" class="mono font-normal text-blue-600 underline decoration-dotted hover:text-blue-800" title="open the readable DSL reference">(?)</button></th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">type</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">trace</th>
@@ -202,6 +203,20 @@ const TD = "border-b border-gray-100 px-3 py-2 align-top";
 // this just makes it viewable/clickable instead of only visible via the raw API.
 const auditTaskRefs = new Map();
 
+// One cell markup for both query_json and query_yaml columns — same
+// underlying task_ref, same collapsed summary, distinguished only by
+// data-kind so the shared toggle handler knows which serialization to
+// render on expand.
+function queryCellHtml(row, kind, summary) {
+  if (!row.task_ref) return '<span class="text-gray-300">—</span>';
+  return `<div class="query-cell" data-event-id="${esc(row.event_id)}" data-kind="${kind}">
+    <button class="query-toggle flex items-start gap-1 text-left text-blue-600 hover:text-blue-800">
+      <span class="query-arrow text-gray-400">▸</span>
+      <span class="query-summary max-w-[260px] truncate">${esc(summary)}</span>
+    </button>
+  </div>`;
+}
+
 function auditRowHtml(row) {
   const entity = row.subject?.entity_type || "";
   const tt = taskTypeOf(row);
@@ -217,14 +232,8 @@ function auditRowHtml(row) {
            <span class="uq-text max-w-[220px] truncate">${esc(row.user_query)}</span>
          </button>`
       : '<span class="text-gray-300">—</span>'}</td>
-    <td class="${TD} mono">${row.task_ref
-      ? `<div class="query-cell" data-event-id="${esc(row.event_id)}">
-           <button class="query-toggle flex items-start gap-1 text-left text-blue-600 hover:text-blue-800">
-             <span class="query-arrow text-gray-400">▸</span>
-             <span class="query-summary max-w-[260px] truncate">${esc(summary)}</span>
-           </button>
-         </div>`
-      : '<span class="text-gray-300">—</span>'}</td>
+    <td class="${TD} mono">${queryCellHtml(row, "json", summary)}</td>
+    <td class="${TD} mono">${queryCellHtml(row, "yaml", summary)}</td>
     <td class="${TD}">${tt ? `<span class="${tagClass(tt === "alert" ? "bad" : "query")}">${esc(tt)}</span>` : '<span class="text-gray-300">—</span>'}</td>
     <td class="${TD}">${row.trace_id
       ? `<button class="view-trace mono text-blue-600 underline decoration-dotted hover:text-blue-800" data-trace-id="${esc(row.trace_id)}">${esc(row.trace_id.slice(0, 8))}…</button>`
@@ -271,21 +280,23 @@ function toggleQueryExpand(cell) {
     return;
   }
   const taskRef = auditTaskRefs.get(cell.dataset.eventId);
+  const kind = cell.dataset.kind; // "json" | "yaml"
   summaryEl.classList.remove("truncate");
   arrowEl.textContent = "▾";
   const pre = document.createElement("pre");
   pre.className = "query-full mono mt-1 max-w-[360px] max-h-[240px] overflow-auto rounded border border-gray-200 bg-gray-50 p-2 text-[11px] text-gray-700";
-  // Render task_ref.inline (the query envelope) as YAML — the same
-  // rendering, via the same js-yaml library, that server.mjs computes and
-  // stores in trace_summary.query_yaml for linked traces. Every audit row
-  // with a task_ref gets this, not only rows that happen to have a linked
-  // trace. Falls back to JSON if the CDN script didn't load.
+  // Both columns render the same task_ref.inline (the query envelope) —
+  // just serialized differently, side by side for comparison. YAML uses
+  // js-yaml (same library server.mjs uses for trace_summary.query_yaml),
+  // loaded via CDN; falls back to JSON if that script didn't load.
   if (!taskRef) {
     pre.textContent = "This audit event has no task_ref attached.";
-  } else if (typeof jsyaml !== "undefined") {
-    pre.textContent = jsyaml.dump(taskRef.inline ?? taskRef);
+  } else if (kind === "yaml") {
+    pre.textContent = typeof jsyaml !== "undefined"
+      ? jsyaml.dump(taskRef.inline ?? taskRef)
+      : JSON.stringify(taskRef, null, 2) + "\n\n(js-yaml failed to load — showing JSON)";
   } else {
-    pre.textContent = JSON.stringify(taskRef, null, 2);
+    pre.textContent = JSON.stringify(taskRef.inline ?? taskRef, null, 2);
   }
   cell.appendChild(pre);
 }
