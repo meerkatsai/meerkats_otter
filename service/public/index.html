@@ -43,6 +43,7 @@
             <th class="whitespace-nowrap px-3 py-2 font-medium">action</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">entity</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">user_query</th>
+            <th class="whitespace-nowrap px-3 py-2 font-medium">query</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">type</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">trace</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">hash</th>
@@ -152,31 +153,66 @@ function taskTypeOf(row) {
   return row.task_ref?.inline?.task_type || "";
 }
 
+const OP_SYMBOL = { eq: "=", neq: "≠", lt: "<", lte: "≤", gt: ">", gte: "≥", contains: "~", in: "in", not_in: "not in", between: "between" };
+
+function fmtPredicate(p) {
+  const field = p.dimension || p.metric || "";
+  const op = OP_SYMBOL[p.operator] || p.operator || "";
+  const val = Array.isArray(p.value) ? p.value.join(",") : p.value;
+  return `${field}${op}${val}`;
+}
+
+function fmtTimeRange(tr) {
+  if (!tr) return "";
+  if (tr.type === "relative") return `last ${tr.value}${(tr.unit || "")[0] || ""}`;
+  if (tr.type === "custom") return `${tr.start}..${tr.end}`;
+  return String(tr.type || "").replace(/_/g, " ");
+}
+
+// One-line human-readable rendering of the task router's structured query —
+// the actual query, not just its raw JSON behind a click.
+function taskSummary(taskRef) {
+  const t = taskRef?.inline;
+  if (!t) return "";
+  const task = t.task || {};
+  if (t.task_type === "query") {
+    const parts = [task.entity];
+    if (task.metrics?.length) parts.push(task.metrics.join(","));
+    const filters = [...(task.where || []), ...(task.having || [])].map(fmtPredicate);
+    if (filters.length) parts.push(filters.join(" & "));
+    if (task.time_range) parts.push(fmtTimeRange(task.time_range));
+    return parts.filter(Boolean).join(" · ");
+  }
+  if (t.task_type === "alert") {
+    const c = task.condition ? fmtPredicate(task.condition) : "";
+    return [task.entity, c && `alert when ${c}`].filter(Boolean).join(" · ");
+  }
+  if (t.task_type === "action") {
+    return [task.operation?.type, task.selection_ref && `ref ${task.selection_ref.slice(0, 8)}…`].filter(Boolean).join(" · ");
+  }
+  return JSON.stringify(task).slice(0, 100);
+}
+
 const TD = "border-b border-gray-100 px-3 py-2 align-top";
 
 // event_id -> task_ref, populated as audit pages load. The task router's
 // emitted JSON (task_ref.inline) is already stored on every audit row —
-// this just makes it clickable from the user_query cell instead of only
-// visible via the raw API.
+// this just makes it viewable/clickable instead of only visible via the raw API.
 const auditTaskRefs = new Map();
 
 function auditRowHtml(row) {
   const entity = row.subject?.entity_type || "";
   const tt = taskTypeOf(row);
-  const hasTask = !!row.task_ref;
-  const queryCell = row.user_query
-    ? (hasTask
-        ? `<button class="view-task text-left underline decoration-dotted hover:text-blue-800" data-event-id="${esc(row.event_id)}" title="${esc(row.user_query)} — click to see the routed task JSON">${esc(row.user_query)}</button>`
-        : esc(row.user_query))
-    : (hasTask
-        ? `<button class="view-task mono text-blue-600 underline decoration-dotted hover:text-blue-800" data-event-id="${esc(row.event_id)}" title="click to see the routed task JSON">view task</button>`
-        : '<span class="text-gray-300">—</span>');
+  const summary = row.task_ref ? taskSummary(row.task_ref) : "";
   return `<tr class="hover:bg-gray-50">
     <td class="${TD} mono text-gray-400">${row.seq}</td>
     <td class="${TD} mono text-gray-400">${fmtTime(row.recorded_at)}</td>
     <td class="${TD}"><span class="${tagClass()}">${esc(row.action)}</span></td>
     <td class="${TD} mono">${esc(entity)}</td>
-    <td class="${TD} max-w-[260px] truncate">${queryCell}</td>
+    <td class="${TD} max-w-[220px] truncate">${row.user_query ? esc(row.user_query) : '<span class="text-gray-300">—</span>'}</td>
+    <td class="${TD} mono max-w-[280px] truncate">${row.task_ref
+      ? `<button class="view-task text-left text-blue-600 underline decoration-dotted hover:text-blue-800" data-event-id="${esc(row.event_id)}" title="${esc(summary)} — click for full JSON">${esc(summary)}</button>`
+      : '<span class="text-gray-300">—</span>'}</td>
     <td class="${TD}">${tt ? `<span class="${tagClass(tt === "alert" ? "bad" : "query")}">${esc(tt)}</span>` : '<span class="text-gray-300">—</span>'}</td>
     <td class="${TD}">${row.trace_id
       ? `<button class="view-trace mono text-blue-600 underline decoration-dotted hover:text-blue-800" data-trace-id="${esc(row.trace_id)}">${esc(row.trace_id.slice(0, 8))}…</button>`
