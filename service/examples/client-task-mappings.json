@@ -1,0 +1,271 @@
+[
+  {
+    "id": "1",
+    "prompt": "Which are the campaigns with ROI greater than 1",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "campaign", "metrics": ["roi"],
+        "having": [{ "metric": "roi", "operator": "gt", "value": 1 }] }
+    }
+  },
+  {
+    "id": "2",
+    "prompt": "Which are the campaigns with ROAS and ROI greater than 1",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "campaign", "metrics": ["roas", "roi"],
+        "having": [
+          { "metric": "roas", "operator": "gt", "value": 1 },
+          { "metric": "roi", "operator": "gt", "value": 1 }
+        ] }
+    }
+  },
+  {
+    "id": "3",
+    "prompt": "Give me the Spend, ACOS, ROI, CPM, CPC and total sales for all campaigns in the last 7 days",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "campaign",
+        "metrics": ["spend", "acos", "roi", "cpm", "cpc", "total_sales"],
+        "time_range": { "type": "relative", "value": 7, "unit": "day" } }
+    }
+  },
+  {
+    "id": "4",
+    "prompt": "List all the FSNs and ASINs with spend above 1000 and ROI below 1",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "product", "metrics": ["spend", "roi"],
+        "dimensions": ["fsn", "asin"],
+        "having": [
+          { "metric": "spend", "operator": "gt", "value": 1000 },
+          { "metric": "roi", "operator": "lt", "value": 1 }
+        ] }
+    }
+  },
+  {
+    "id": "5",
+    "prompt": "What is the status of my hair growth serum product?",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "product", "metrics": ["spend"], "dimensions": ["status"],
+        "where": [{ "dimension": "product_name", "operator": "contains", "value": "hair growth serum" }] }
+    },
+    "note": "'status' isn't a metric in this DSL — only usable as a dimension, so a filler metric (spend) is required since metrics is non-empty-required."
+  },
+  {
+    "id": "6",
+    "prompt": "Give me the spend and conversions for [a product name]",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "product", "metrics": ["spend", "conversions"],
+        "where": [{ "dimension": "product_name", "operator": "eq", "value": "<PRODUCT_NAME>" }] }
+    },
+    "note": "placeholder value — substitute the real product name at request time."
+  },
+  {
+    "id": "7",
+    "prompt": "Give me campaign performance for the last 3 days",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "campaign", "metrics": ["spend", "roas", "roi", "acos"],
+        "time_range": { "type": "relative", "value": 3, "unit": "day" } }
+    }
+  },
+  {
+    "id": "8",
+    "prompt": "What is the ROAS and ROI of all campaigns for the last 7 days?",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "campaign", "metrics": ["roas", "roi"],
+        "time_range": { "type": "relative", "value": 7, "unit": "day" } }
+    }
+  },
+  {
+    "id": "9",
+    "prompt": "Give me the ACOS, ROI, CPM, CPC and total sales for all campaigns in the last 7 days",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "campaign", "metrics": ["acos", "roi", "cpm", "cpc", "total_sales"],
+        "time_range": { "type": "relative", "value": 7, "unit": "day" } }
+    }
+  },
+  {
+    "id": "10a",
+    "prompt": "Show me campaigns with ROI below 1 on Flipkart and ACOS above 100% on Amazon (part 1/2)",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "campaign", "metrics": ["roi"],
+        "where": [{ "dimension": "platform", "operator": "eq", "value": "flipkart" }],
+        "having": [{ "metric": "roi", "operator": "lt", "value": 1 }] }
+    },
+    "note": "split from a single compound prompt — where/having are AND-only, no OR across platforms in one task. Decompose compound cross-platform asks into N tasks at the planner layer."
+  },
+  {
+    "id": "10b",
+    "prompt": "Show me campaigns with ROI below 1 on Flipkart and ACOS above 100% on Amazon (part 2/2)",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "campaign", "metrics": ["acos"],
+        "where": [{ "dimension": "platform", "operator": "eq", "value": "amazon" }],
+        "having": [{ "metric": "acos", "operator": "gt", "value": 1.0 }] }
+    },
+    "note": "assumes acos expressed as a fraction (1.0 = 100%)."
+  },
+  {
+    "id": "11",
+    "prompt": "Show me the ROAS trend for the last 2 weeks (was: \"Why did my ROAS drop last week?\")",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "campaign", "metrics": ["roas"], "dimensions": ["date"],
+        "time_range": { "type": "relative", "value": 2, "unit": "week" } }
+    }
+  },
+  {
+    "id": "12",
+    "prompt": "What's my ACOS trend this month?",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "campaign", "metrics": ["acos"], "dimensions": ["date"],
+        "time_range": { "type": "this_month" } }
+    }
+  },
+  {
+    "id": "13",
+    "prompt": "Compare PLA vs PCA campaign performance on Flipkart (was: \"Do PLA or PCA work better?\")",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "campaign", "metrics": ["roas", "spend", "acos"],
+        "dimensions": ["campaign_type"],
+        "where": [
+          { "dimension": "platform", "operator": "eq", "value": "flipkart" },
+          { "dimension": "campaign_type", "operator": "in", "value": ["PLA", "PCA"] }
+        ] }
+    }
+  },
+  {
+    "id": "14",
+    "prompt": "How did we do yesterday across all platforms?",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "campaign", "metrics": ["spend", "roas", "total_sales"],
+        "dimensions": ["platform"], "time_range": { "type": "yesterday" } }
+    }
+  },
+  {
+    "id": "15",
+    "prompt": "Compare Amazon and Flipkart this month",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "campaign", "metrics": ["spend", "roas", "total_sales"],
+        "dimensions": ["platform"],
+        "where": [{ "dimension": "platform", "operator": "in", "value": ["amazon", "flipkart"] }],
+        "time_range": { "type": "this_month" } }
+    }
+  },
+  {
+    "id": "16",
+    "prompt": "For every rupee I spent overall, how much revenue did I make?",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "account", "metrics": ["roas"] }
+    },
+    "note": "entity='account' — blended figure, no per-campaign breakdown requested."
+  },
+  {
+    "id": "17",
+    "prompt": "Which Meta campaigns have the highest ROAS this month?",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "campaign", "metrics": ["roas"],
+        "where": [{ "dimension": "platform", "operator": "eq", "value": "meta" }],
+        "time_range": { "type": "this_month" },
+        "sort": { "metric": "roas", "direction": "desc" } }
+    }
+  },
+  {
+    "id": "18",
+    "prompt": "Show me Search Lost Impression Share (budget) for my Google campaigns (was: \"Am I losing impressions because…\")",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "campaign", "metrics": ["search_lost_impression_share_budget"],
+        "where": [{ "dimension": "platform", "operator": "eq", "value": "google" }] }
+    }
+  },
+  {
+    "id": "19",
+    "prompt": "What's my store conversion rate and average order value?",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "store", "metrics": ["conversion_rate", "average_order_value"] }
+    }
+  },
+  {
+    "id": "20_25",
+    "prompt": "Show my price vs competitors for each product this week",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "product", "metrics": ["price", "competitor_price"],
+        "dimensions": ["product_name"],
+        "time_range": { "type": "relative", "value": 7, "unit": "day" } }
+    },
+    "note": "'vs competitors' flattened into two side-by-side metrics — comparison block only supports previous_period/time_range baselines, no entity-vs-entity comparison construct. Best current fit; confirmed with client 2026-09-08."
+  },
+  {
+    "id": "21",
+    "prompt": "Show me the latest reviews and ratings on my products",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "product", "metrics": ["rating", "review_count"],
+        "dimensions": ["product_name"],
+        "time_range": { "type": "relative", "value": 30, "unit": "day" },
+        "sort": { "metric": "rating", "direction": "desc" } }
+    },
+    "note": "rating/review_count as aggregate metrics fit query_and_act cleanly. Raw review text retrieval (not requested here) would not — that's content retrieval, a different task family."
+  },
+  {
+    "id": "22",
+    "prompt": "Show me campaigns that spent over 10,000 yesterday (was an alert-setup ask)",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "campaign", "metrics": ["spend"],
+        "having": [{ "metric": "spend", "operator": "gt", "value": 10000 }],
+        "time_range": { "type": "yesterday" } }
+    },
+    "note": "one-off question -> task_type=query. A standing 'notify me whenever' version of the same ask is task_type=alert (see 22_alert variant)."
+  },
+  {
+    "id": "22_alert",
+    "prompt": "(standing variant) Alert me whenever a campaign spends over 10,000 in a day",
+    "envelope": {
+      "version": "1.0", "task_type": "alert",
+      "task": { "entity": "campaign",
+        "condition": { "metric": "spend", "operator": "gt", "value": 10000 },
+        "time_window": { "type": "yesterday" } }
+    }
+  },
+  {
+    "id": "23",
+    "prompt": "Show me Amazon keywords with spend but zero sales this month (was: \"wasting money\")",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "keyword", "metrics": ["spend", "sales"],
+        "where": [{ "dimension": "platform", "operator": "eq", "value": "amazon" }],
+        "having": [
+          { "metric": "spend", "operator": "gt", "value": 0 },
+          { "metric": "sales", "operator": "eq", "value": 0 }
+        ],
+        "time_range": { "type": "this_month" } }
+    }
+  },
+  {
+    "id": "24",
+    "prompt": "Show me spend and sales by placement for the last 30 days",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "placement", "metrics": ["spend", "sales"],
+        "dimensions": ["placement"],
+        "time_range": { "type": "relative", "value": 30, "unit": "day" } }
+    }
+  }
+]
