@@ -95,13 +95,16 @@
 
 </main>
 
-<div id="trace-modal" class="fixed inset-0 z-20 hidden items-center justify-center bg-black/30 p-6">
+<!-- Shared JSON detail modal: used for both trace and task_ref (the task
+     router's emitted JSON) so an audit row's linked data is one click away
+     without duplicating markup. -->
+<div id="detail-modal" class="fixed inset-0 z-20 hidden items-center justify-center bg-black/30 p-6">
   <div class="max-h-[80vh] w-full max-w-2xl overflow-auto rounded-lg border border-gray-200 bg-white shadow-xl">
     <div class="sticky top-0 flex items-center justify-between border-b border-gray-200 bg-white px-4 py-2.5">
-      <span class="mono text-xs font-semibold" id="trace-modal-title">trace</span>
-      <button id="trace-modal-close" class="rounded-md px-2 py-1 text-sm text-gray-400 hover:bg-gray-100 hover:text-gray-700">✕</button>
+      <span class="mono text-xs font-semibold" id="detail-modal-title">detail</span>
+      <button id="detail-modal-close" class="rounded-md px-2 py-1 text-sm text-gray-400 hover:bg-gray-100 hover:text-gray-700">✕</button>
     </div>
-    <pre id="trace-modal-body" class="mono p-4 text-xs"></pre>
+    <pre id="detail-modal-body" class="mono p-4 text-xs"></pre>
   </div>
 </div>
 
@@ -151,15 +154,29 @@ function taskTypeOf(row) {
 
 const TD = "border-b border-gray-100 px-3 py-2 align-top";
 
+// event_id -> task_ref, populated as audit pages load. The task router's
+// emitted JSON (task_ref.inline) is already stored on every audit row —
+// this just makes it clickable from the user_query cell instead of only
+// visible via the raw API.
+const auditTaskRefs = new Map();
+
 function auditRowHtml(row) {
   const entity = row.subject?.entity_type || "";
   const tt = taskTypeOf(row);
+  const hasTask = !!row.task_ref;
+  const queryCell = row.user_query
+    ? (hasTask
+        ? `<button class="view-task text-left underline decoration-dotted hover:text-blue-800" data-event-id="${esc(row.event_id)}" title="${esc(row.user_query)} — click to see the routed task JSON">${esc(row.user_query)}</button>`
+        : esc(row.user_query))
+    : (hasTask
+        ? `<button class="view-task mono text-blue-600 underline decoration-dotted hover:text-blue-800" data-event-id="${esc(row.event_id)}" title="click to see the routed task JSON">view task</button>`
+        : '<span class="text-gray-300">—</span>');
   return `<tr class="hover:bg-gray-50">
     <td class="${TD} mono text-gray-400">${row.seq}</td>
     <td class="${TD} mono text-gray-400">${fmtTime(row.recorded_at)}</td>
     <td class="${TD}"><span class="${tagClass()}">${esc(row.action)}</span></td>
     <td class="${TD} mono">${esc(entity)}</td>
-    <td class="${TD} max-w-[260px] truncate" title="${esc(row.user_query || "")}">${row.user_query ? esc(row.user_query) : '<span class="text-gray-300">—</span>'}</td>
+    <td class="${TD} max-w-[260px] truncate">${queryCell}</td>
     <td class="${TD}">${tt ? `<span class="${tagClass(tt === "alert" ? "bad" : "query")}">${esc(tt)}</span>` : '<span class="text-gray-300">—</span>'}</td>
     <td class="${TD}">${row.trace_id
       ? `<button class="view-trace mono text-blue-600 underline decoration-dotted hover:text-blue-800" data-trace-id="${esc(row.trace_id)}">${esc(row.trace_id.slice(0, 8))}…</button>`
@@ -168,31 +185,47 @@ function auditRowHtml(row) {
   </tr>`;
 }
 
+function openDetailModal(title) {
+  $("#detail-modal-title").textContent = title;
+  $("#detail-modal-body").textContent = "loading…";
+  $("#detail-modal").classList.remove("hidden");
+  $("#detail-modal").classList.add("flex");
+}
+
+function closeDetailModal() {
+  $("#detail-modal").classList.add("hidden");
+  $("#detail-modal").classList.remove("flex");
+}
+
 async function openTraceModal(traceId) {
-  $("#trace-modal-title").textContent = traceId;
-  $("#trace-modal-body").textContent = "loading…";
-  $("#trace-modal").classList.remove("hidden");
-  $("#trace-modal").classList.add("flex");
+  openDetailModal(traceId);
   const r = await fetch(`/trace/${encodeURIComponent(traceId)}`);
   if (r.status === 404) {
-    $("#trace-modal-body").textContent =
+    $("#detail-modal-body").textContent =
       "No trace found for this trace_id.\n\nThe audit event references a trace_id, but nothing was ever POSTed to /trace with that id — the audit event and the trace are recorded separately, so this can happen if only one of the two was ever submitted.";
     return;
   }
   const trace = await r.json();
-  $("#trace-modal-body").textContent = JSON.stringify(trace, null, 2);
+  $("#detail-modal-body").textContent = JSON.stringify(trace, null, 2);
 }
 
-function closeTraceModal() {
-  $("#trace-modal").classList.add("hidden");
-  $("#trace-modal").classList.remove("flex");
+// The task router's emitted JSON — already stored in task_ref for every
+// audit row, this just makes it viewable next to the query that produced it.
+function openTaskModal(eventId) {
+  const taskRef = auditTaskRefs.get(eventId);
+  openDetailModal("routed task — " + eventId);
+  $("#detail-modal-body").textContent = taskRef
+    ? JSON.stringify(taskRef, null, 2)
+    : "This audit event has no task_ref attached.";
 }
 
-$("#trace-modal-close").addEventListener("click", closeTraceModal);
-$("#trace-modal").addEventListener("click", (e) => { if (e.target.id === "trace-modal") closeTraceModal(); });
+$("#detail-modal-close").addEventListener("click", closeDetailModal);
+$("#detail-modal").addEventListener("click", (e) => { if (e.target.id === "detail-modal") closeDetailModal(); });
 $("#audit-rows").addEventListener("click", (e) => {
-  const btn = e.target.closest(".view-trace");
-  if (btn) openTraceModal(btn.dataset.traceId);
+  const traceBtn = e.target.closest(".view-trace");
+  if (traceBtn) return openTraceModal(traceBtn.dataset.traceId);
+  const taskBtn = e.target.closest(".view-task");
+  if (taskBtn) return openTaskModal(taskBtn.dataset.eventId);
 });
 
 async function loadAudit(reset = true) {
@@ -201,6 +234,7 @@ async function loadAudit(reset = true) {
   if (reset) { auditCursor = null; $("#audit-rows").innerHTML = ""; }
   const url = `/audit?tenant=${encodeURIComponent(t)}&limit=25` + (auditCursor != null ? `&before=${auditCursor}` : "");
   const r = await fetch(url).then((x) => x.json());
+  r.events.forEach((e) => auditTaskRefs.set(e.event_id, e.task_ref));
   $("#audit-rows").insertAdjacentHTML("beforeend", r.events.map(auditRowHtml).join(""));
   auditCursor = r.next_cursor;
   $("#audit-more").classList.toggle("hidden", auditCursor == null);
