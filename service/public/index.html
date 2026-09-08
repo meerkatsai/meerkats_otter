@@ -44,6 +44,7 @@
             <th class="whitespace-nowrap px-3 py-2 font-medium">entity</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">user_query</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">type</th>
+            <th class="whitespace-nowrap px-3 py-2 font-medium">trace</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">hash</th>
           </tr>
         </thead>
@@ -93,6 +94,16 @@
   </section>
 
 </main>
+
+<div id="trace-modal" class="fixed inset-0 z-20 hidden items-center justify-center bg-black/30 p-6">
+  <div class="max-h-[80vh] w-full max-w-2xl overflow-auto rounded-lg border border-gray-200 bg-white shadow-xl">
+    <div class="sticky top-0 flex items-center justify-between border-b border-gray-200 bg-white px-4 py-2.5">
+      <span class="mono text-xs font-semibold" id="trace-modal-title">trace</span>
+      <button id="trace-modal-close" class="rounded-md px-2 py-1 text-sm text-gray-400 hover:bg-gray-100 hover:text-gray-700">✕</button>
+    </div>
+    <pre id="trace-modal-body" class="mono p-4 text-xs"></pre>
+  </div>
+</div>
 
 <script>
 const $ = (s, el = document) => el.querySelector(s);
@@ -150,9 +161,39 @@ function auditRowHtml(row) {
     <td class="${TD} mono">${esc(entity)}</td>
     <td class="${TD} max-w-[260px] truncate" title="${esc(row.user_query || "")}">${row.user_query ? esc(row.user_query) : '<span class="text-gray-300">—</span>'}</td>
     <td class="${TD}">${tt ? `<span class="${tagClass(tt === "alert" ? "bad" : "query")}">${esc(tt)}</span>` : '<span class="text-gray-300">—</span>'}</td>
+    <td class="${TD}">${row.trace_id
+      ? `<button class="view-trace mono text-blue-600 underline decoration-dotted hover:text-blue-800" data-trace-id="${esc(row.trace_id)}">${esc(row.trace_id.slice(0, 8))}…</button>`
+      : '<span class="text-gray-300">—</span>'}</td>
     <td class="${TD} mono text-gray-400" title="${esc(row.hash)}">${esc((row.hash || "").slice(0, 14))}…</td>
   </tr>`;
 }
+
+async function openTraceModal(traceId) {
+  $("#trace-modal-title").textContent = traceId;
+  $("#trace-modal-body").textContent = "loading…";
+  $("#trace-modal").classList.remove("hidden");
+  $("#trace-modal").classList.add("flex");
+  const r = await fetch(`/trace/${encodeURIComponent(traceId)}`);
+  if (r.status === 404) {
+    $("#trace-modal-body").textContent =
+      "No trace found for this trace_id.\n\nThe audit event references a trace_id, but nothing was ever POSTed to /trace with that id — the audit event and the trace are recorded separately, so this can happen if only one of the two was ever submitted.";
+    return;
+  }
+  const trace = await r.json();
+  $("#trace-modal-body").textContent = JSON.stringify(trace, null, 2);
+}
+
+function closeTraceModal() {
+  $("#trace-modal").classList.add("hidden");
+  $("#trace-modal").classList.remove("flex");
+}
+
+$("#trace-modal-close").addEventListener("click", closeTraceModal);
+$("#trace-modal").addEventListener("click", (e) => { if (e.target.id === "trace-modal") closeTraceModal(); });
+$("#audit-rows").addEventListener("click", (e) => {
+  const btn = e.target.closest(".view-trace");
+  if (btn) openTraceModal(btn.dataset.traceId);
+});
 
 async function loadAudit(reset = true) {
   const t = tenant();
