@@ -87,18 +87,25 @@ export async function appendAudit(evt) {
   }
 }
 
+const TRACE_COLUMNS = "trace_id, tenant_ref, task_type, status, latency_ms, output_ref, query_yaml, created_at";
+
 // Upsert the one-row-per-request trace summary (full span firehose goes to
 // the telemetry backend, not here — see migrations/001_init.sql).
+// query_yaml is the YAML rendering of the trace's task instance (js-yaml
+// dump, computed by the caller — see server.mjs) — the same structured
+// query the dashboard's audit "query" column summarizes, just rendered as
+// YAML instead of JSON, per row, in this table.
 export async function upsertTraceSummary(s) {
   const { rows } = await pool.query(
-    `INSERT INTO trace_summary (trace_id, tenant_ref, task_type, status, latency_ms, output_ref)
-       VALUES ($1,$2,$3,$4,$5,$6)
+    `INSERT INTO trace_summary (trace_id, tenant_ref, task_type, status, latency_ms, output_ref, query_yaml)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
      ON CONFLICT (trace_id) DO UPDATE SET
        status = EXCLUDED.status,
        latency_ms = EXCLUDED.latency_ms,
-       output_ref = EXCLUDED.output_ref
-     RETURNING trace_id, tenant_ref, task_type, status, latency_ms, output_ref, created_at`,
-    [s.trace_id, s.tenant_ref, s.task_type, s.status, s.latency_ms ?? null, s.output_ref ?? null]
+       output_ref = EXCLUDED.output_ref,
+       query_yaml = EXCLUDED.query_yaml
+     RETURNING ${TRACE_COLUMNS}`,
+    [s.trace_id, s.tenant_ref, s.task_type, s.status, s.latency_ms ?? null, s.output_ref ?? null, s.query_yaml ?? null]
   );
   return rows[0];
 }
@@ -116,8 +123,8 @@ export async function listTraceSummaries(tenant_ref, { limit = 50, before } = {}
   }
   params.push(cappedLimit);
   const { rows } = await pool.query(
-    `SELECT trace_id, tenant_ref, task_type, status, latency_ms, output_ref, created_at
-       FROM trace_summary WHERE ${where} ORDER BY created_at DESC LIMIT $${params.length}`,
+    `SELECT ${TRACE_COLUMNS} FROM trace_summary
+      WHERE ${where} ORDER BY created_at DESC LIMIT $${params.length}`,
     params
   );
   return rows;
@@ -125,8 +132,7 @@ export async function listTraceSummaries(tenant_ref, { limit = 50, before } = {}
 
 export async function getTraceSummary(trace_id) {
   const { rows } = await pool.query(
-    `SELECT trace_id, tenant_ref, task_type, status, latency_ms, output_ref, created_at
-       FROM trace_summary WHERE trace_id = $1`,
+    `SELECT ${TRACE_COLUMNS} FROM trace_summary WHERE trace_id = $1`,
     [trace_id]
   );
   return rows[0] ?? null;

@@ -68,6 +68,7 @@
             <th class="whitespace-nowrap px-3 py-2 font-medium">status</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">latency_ms</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">output_ref</th>
+            <th class="whitespace-nowrap px-3 py-2 font-medium">query_yaml</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">created_at</th>
           </tr>
         </thead>
@@ -277,16 +278,35 @@ async function loadAudit(reset = true) {
   $("#audit-empty").classList.toggle("hidden", $("#audit-rows").children.length > 0);
 }
 
+// trace_id -> query_yaml, populated as trace pages load (mirrors
+// auditTaskRefs above) — avoids stuffing multi-line YAML into a data-*
+// attribute.
+const traceYamls = new Map();
+
 function traceRowHtml(row) {
+  const yamlPreview = row.query_yaml ? row.query_yaml.split("\n")[0] : "";
   return `<tr class="hover:bg-gray-50">
     <td class="${TD} mono text-gray-400" title="${esc(row.trace_id)}">${esc(row.trace_id.slice(0, 8))}…</td>
     <td class="${TD}"><span class="${tagClass("query")}">${esc(row.task_type || "")}</span></td>
     <td class="${TD}"><span class="${tagClass(row.status === "ok" ? "ok" : row.status === "error" ? "bad" : "")}">${esc(row.status)}</span></td>
     <td class="${TD} mono">${row.latency_ms ?? '<span class="text-gray-300">—</span>'}</td>
     <td class="${TD} mono max-w-[220px] truncate text-gray-400">${row.output_ref ? esc(row.output_ref) : "—"}</td>
+    <td class="${TD} mono max-w-[220px] truncate">${row.query_yaml
+      ? `<button class="view-query-yaml text-left text-blue-600 underline decoration-dotted hover:text-blue-800" data-trace-id="${esc(row.trace_id)}" title="click to view the full YAML">${esc(yamlPreview)}</button>`
+      : '<span class="text-gray-300">—</span>'}</td>
     <td class="${TD} mono text-gray-400">${fmtTime(row.created_at)}</td>
   </tr>`;
 }
+
+function openQueryYamlModal(traceId) {
+  openDetailModal("query_yaml — " + traceId);
+  $("#detail-modal-body").textContent = traceYamls.get(traceId) || "No query_yaml stored for this trace.";
+}
+
+$("#trace-rows").addEventListener("click", (e) => {
+  const btn = e.target.closest(".view-query-yaml");
+  if (btn) openQueryYamlModal(btn.dataset.traceId);
+});
 
 async function loadTraces(reset = true) {
   const t = tenant();
@@ -294,6 +314,7 @@ async function loadTraces(reset = true) {
   if (reset) { traceCursor = null; $("#trace-rows").innerHTML = ""; }
   const url = `/trace?tenant=${encodeURIComponent(t)}&limit=25` + (traceCursor ? `&before=${encodeURIComponent(traceCursor)}` : "");
   const r = await fetch(url).then((x) => x.json());
+  r.traces.forEach((row) => traceYamls.set(row.trace_id, row.query_yaml));
   $("#trace-rows").insertAdjacentHTML("beforeend", r.traces.map(traceRowHtml).join(""));
   traceCursor = r.next_cursor;
   $("#trace-more").classList.toggle("hidden", !traceCursor);

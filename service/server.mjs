@@ -2,6 +2,7 @@
 import Fastify from "fastify";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
+import { dump as toYaml } from "js-yaml";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
@@ -135,6 +136,10 @@ app.post("/trace", async (req, reply) => {
     ? Math.max(0, new Date(trace.completed_at) - new Date(trace.received_at))
     : null;
 
+  // The trace's task instance, rendered as YAML — same structured query the
+  // audit "query" column summarizes, per row here as query_yaml.
+  const query_yaml = trace.task ? toYaml(trace.task) : null;
+
   try {
     const r = await upsertTraceSummary({
       trace_id: trace.trace_id,
@@ -143,6 +148,7 @@ app.post("/trace", async (req, reply) => {
       status: trace.outcome?.status ?? "in_progress",
       latency_ms,
       output_ref: trace.outcome?.output?.ref ?? null,
+      query_yaml,
     });
     return reply.code(201).send(r);
   } catch (err) {
