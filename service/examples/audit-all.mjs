@@ -18,6 +18,7 @@ for (const c of cases) {
     event_id: randomUUID(),
     tenant_ref: tenant,
     action: "task_submitted",
+    user_query: c.prompt,
     actor: { kind: "user", principal_ref: "demo_user", auth_method: "test_harness" },
     subject: { entity_type: c.envelope.task.entity },
     task_ref: {
