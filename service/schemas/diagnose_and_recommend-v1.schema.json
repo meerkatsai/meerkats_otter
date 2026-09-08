@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meerkats.ai/schemas/diagnose_and_recommend/v1.json",
+  "title": "Meerkats Diagnosis v1 — cause tree + evidence contract",
+  "description": "The agentic 'why' branch, deliberately separate from the deterministic query_and_act layer. A diagnosis_request is NOT executable as a single query; a planner decomposes it into many query_task instances (from query_and_act/v1) and reasons over their results. This schema defines what it emits back: a ranked cause tree whose every node links to the evidence (validated queries) that supports it. Cross-file $refs point at https://meerkats.ai/schemas/query_and_act/v1.json — both schemas must be registered in the validator.",
+
+  "$ref": "#/$defs/diagnosis_result",
+
+  "$defs": {
+
+    "diagnosis_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "task_type", "task"],
+      "description": "LLM/planner-emitted. Names the movement to explain; does not prescribe how.",
+      "properties": {
+        "version": { "const": "1.0" },
+        "task_type": { "const": "diagnosis" },
+        "task": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["entity", "metric", "comparison"],
+          "properties": {
+            "entity": { "type": "string" },
+            "metric": { "type": "string", "description": "the metric whose movement is under investigation" },
+            "time_range": { "$ref": "https://meerkats.ai/schemas/query_and_act/v1.json#/$defs/time_range" },
+            "comparison": {
+              "$ref": "https://meerkats.ai/schemas/query_and_act/v1.json#/$defs/comparison",
+              "description": "defines the movement (current vs baseline) being explained"
+            },
+            "objective": { "type": "string", "enum": ["explain_change"], "default": "explain_change" },
+            "decompose_by": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "optional prioritization hint (dimensions or factors); the agent may investigate beyond it"
+            }
+          }
+        }
+      }
+    },
+
+    "contribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["delta_abs", "delta_share"],
+      "description": "How much of a movement a node accounts for. Signed throughout: negative delta_abs pushed the metric down.",
+      "properties": {
+        "delta_abs": { "type": "number", "description": "signed change in metric units attributed to this node" },
+        "delta_share": { "type": "number", "description": "delta_abs as a fraction of the root observation's total delta. Root = 1.0. May exceed 1 or flip sign when other movers offset." },
+        "baseline_value": { "type": "number" },
+        "current_value": { "type": "number" }
+      }
+    },
+
+    "root_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metric", "comparison", "direction", "contribution"],
+      "description": "The confirmed movement being explained — the tree's root.",
+      "properties": {
+        "metric": { "type": "string" },
+        "time_range": { "$ref": "https://meerkats.ai/schemas/query_and_act/v1.json#/$defs/time_range" },
+        "comparison": { "$ref": "https://meerkats.ai/schemas/query_and_act/v1.json#/$defs/comparison" },
+        "direction": { "type": "string", "enum": ["increase", "decrease"] },
+        "contribution": { "$ref": "#/$defs/contribution", "description": "at the root, delta_share is 1.0 by definition" }
+      }
+    },
+
+    "decomposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "additive"],
+      "description": "Declares how a node's children were derived AND how they relate to it arithmetically. Absent on leaf nodes.",
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": ["dimensional", "factor", "none"],
+          "description": "dimensional: split by a dimension (platform, geo, sku). factor: split into driver terms (revenue = orders x aov). none: children are independent hypotheses."
+        },
+        "by": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "dimensional: the dimension(s) split on. factor: the driver terms."
+        },
+        "additive": {
+          "type": "boolean",
+          "description": "true: children delta_abs sum to this node's delta_abs (dimensional). false: multiplicative drivers, attributed additively via log/LMDI decomposition (factor)."
+        },
+        "residual": {
+          "type": "number",
+          "description": "portion of this node's delta_abs not attributed to any child — interaction/mix effect or unexplained"
+        }
+      }
+    },
+
+    "cause_node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cause_id", "statement", "kind", "contribution", "confidence", "status"],
+      "description": "One candidate cause. Recurses via children into sub-causes.",
+      "properties": {
+        "cause_id": { "type": "string" },
+        "statement": { "type": "string", "description": "human-readable claim, e.g. 'Meta revenue fell 32%, driven by CVR'" },
+        "kind": {
+          "type": "string",
+          "enum": ["localization", "factor", "data_artifact", "external", "hypothesis"],
+          "description": "localization: a slice owns the drop. factor: a driver term moved. data_artifact: a pipeline/tag issue. external: seasonality/stockout/event. hypothesis: proposed, not yet evidenced."
+        },
+        "contribution": { "$ref": "#/$defs/contribution" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1, "description": "strength of evidential support; orthogonal to contribution — a big mover can be low-confidence" },
+        "status": {
+          "type": "string",
+          "enum": ["supported", "ruled_out", "unverified"],
+          "description": "ruled_out nodes are kept on purpose — 'checked, not a data lag' is a result worth showing"
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "evidence_ids in diagnosis_result.evidence that support this node"
+        },
+        "decomposition": { "$ref": "#/$defs/decomposition" },
+        "children": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/cause_node" }
+        }
+      }
+    },
+
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary"],
+      "description": "The salient result extracted from an evidence query — not the full row set.",
+      "properties": {
+        "summary": { "type": "string" },
+        "values": {
+          "type": "object",
+          "additionalProperties": { "type": "number" },
+          "description": "named scalars pulled from the query result, e.g. { delta: -12400, share: 0.32 }"
+        }
+      }
+    },
+
+    "evidence_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "query", "finding"],
+      "description": "A validated, catalog-grounded query and what it showed. Re-runnable for audit — this is what keeps the agentic layer honest.",
+      "properties": {
+        "evidence_id": { "type": "string" },
+        "query": {
+          "$ref": "https://meerkats.ai/schemas/query_and_act/v1.json#/$defs/query_task",
+          "description": "the exact query_task the agent ran to produce this evidence"
+        },
+        "finding": { "$ref": "#/$defs/finding" },
+        "data_as_of": { "type": "string", "format": "date-time" }
+      }
+    },
+
+    "data_quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "checks"],
+      "description": "Precondition gate, evaluated before causes are asserted. A pipeline lag or broken tag mimics a real drop; if this comes back suspect the movement itself is in doubt and the cause tree is withheld.",
+      "properties": {
+        "status": { "type": "string", "enum": ["clean", "suspect", "unchecked"] },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "result"],
+            "properties": {
+              "name": { "type": "string", "description": "e.g. freshness_lag, tag_coverage, spend_reconciliation" },
+              "result": { "type": "string", "enum": ["pass", "fail", "warn"] },
+              "evidence_refs": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+
+    "diagnosis_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["diagnosis_id", "generated_at", "observation", "status", "data_quality", "evidence"],
+      "properties": {
+        "diagnosis_id": { "type": "string", "format": "uuid" },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "observation": { "$ref": "#/$defs/root_observation" },
+        "status": {
+          "type": "string",
+          "enum": ["explained", "partially_explained", "inconclusive", "data_quality_blocked"]
+        },
+        "data_quality": { "$ref": "#/$defs/data_quality" },
+        "root_cause_tree": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/cause_node" },
+          "description": "top-level candidate causes; each may nest. Empty when data_quality_blocked."
+        },
+        "primary_causes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "cause_ids ordered by |delta_share| among supported causes — the ranked headline answer, pre-computed so consumers don't re-rank the tree"
+        },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidence_item" },
+          "description": "flat store; cause nodes and data-quality checks reference into it by evidence_id"
+        },
+        "unexplained_share": {
+          "type": "number",
+          "description": "fraction of the root delta not attributed to any supported cause; 1 - sum of supported top-level shares (net of offsets)"
+        }
+      },
+      "allOf": [
+        {
+          "description": "A data-quality-blocked diagnosis must not also assert causes.",
+          "if": {
+            "properties": { "status": { "const": "data_quality_blocked" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": { "root_cause_tree": { "type": "array", "maxItems": 0 } }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meerkats.ai/schemas/audit-log/v1.json",
+  "title": "Meerkats Audit Log v1 — append-only, hash-chained",
+  "description": "The system-of-record for consequential events: every mutation, every approval decision, every standing-config change. Distinct from task-trace (observability): audit is complete (never sampled), immutable, tamper-evident, and attributable. Because mutation is confined to the action and workflow intents, auditing those two paths captures every state change. Events form a per-tenant hash chain (prev_hash → hash); stored append-only in the system-of-record with UPDATE/DELETE revoked at the DB role. Events reference immutable artifacts (resolved_selection, execution_plan, task) by digest rather than embedding them.",
+
+  "$ref": "#/$defs/audit_event",
+
+  "$defs": {
+
+    "audit_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_id", "seq", "recorded_at", "prev_hash", "hash", "action", "actor", "tenant_ref", "subject"],
+      "properties": {
+        "event_id": { "type": "string", "format": "uuid" },
+        "seq": { "type": "integer", "minimum": 0, "description": "monotonic per tenant; gaps signal missing/dropped events" },
+        "recorded_at": { "type": "string", "format": "date-time", "description": "authoritative server clock, not client-supplied" },
+        "prev_hash": { "type": ["string", "null"], "description": "hash of the previous event in this tenant's chain; null only for the genesis event" },
+        "hash": { "type": "string", "description": "digest over this event's canonical serialization EXCLUDING hash and signature; links the chain" },
+        "signature": { "type": "string", "description": "optional detached cryptographic signature over hash, for non-repudiation" },
+        "trace_id": { "type": "string", "format": "uuid", "description": "correlates to the task-trace for the same request" },
+        "action": {
+          "type": "string",
+          "enum": ["task_submitted", "approval_requested", "approval_granted", "approval_denied", "selection_resolved", "execution_started", "execution_completed", "execution_failed", "config_created", "config_updated", "config_paused", "config_deleted"]
+        },
+        "actor": { "$ref": "#/$defs/actor" },
+        "tenant_ref": { "type": "string", "description": "server-injected scope; never client-supplied" },
+        "subject": { "$ref": "#/$defs/subject" },
+        "risk_level": { "type": "string", "enum": ["read_only", "low", "medium", "high", "critical"], "description": "echoed from the execution_plan for fast filtering" },
+        "task_ref": { "$ref": "https://meerkats.ai/schemas/task-trace/v1.json#/$defs/artifact_ref", "description": "the task instance that was submitted" },
+        "execution_plan_ref": { "$ref": "https://meerkats.ai/schemas/task-trace/v1.json#/$defs/artifact_ref" },
+        "resolved_selection_ref": { "$ref": "https://meerkats.ai/schemas/task-trace/v1.json#/$defs/artifact_ref", "description": "the frozen selection acted on — proves WHICH entities changed" },
+        "change": { "$ref": "#/$defs/change_set" },
+        "decision": { "$ref": "#/$defs/decision" },
+        "outcome": { "$ref": "#/$defs/outcome" }
+      },
+      "allOf": [
+        {
+          "description": "execution events must cite the resolved selection they acted on",
+          "if": { "properties": { "action": { "enum": ["execution_started", "execution_completed", "execution_failed"] } }, "required": ["action"] },
+          "then": { "required": ["resolved_selection_ref"] }
+        },
+        {
+          "description": "approval outcomes must carry the decision",
+          "if": { "properties": { "action": { "enum": ["approval_granted", "approval_denied"] } }, "required": ["action"] },
+          "then": { "required": ["decision"] }
+        }
+      ]
+    },
+
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "principal_ref"],
+      "description": "Who caused the event. For autonomous runs, kind=workflow and on_behalf_of names the human who authorized it — that pairing is what makes an unattended action non-repudiable.",
+      "properties": {
+        "kind": { "type": "string", "enum": ["user", "workflow", "system"] },
+        "principal_ref": { "type": "string", "description": "server-side principal id; never raw PII" },
+        "auth_method": { "type": "string", "description": "e.g. sso, api_key, service_account" },
+        "on_behalf_of": { "type": "string", "description": "for workflow/system actors, the human principal who created/approved the standing config" },
+        "trigger": { "type": "string", "description": "for workflow/system actors, what fired it (schedule id or event)" }
+      }
+    },
+
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entity_type"],
+      "properties": {
+        "entity_type": { "type": "string", "description": "e.g. campaign, workflow, alert" },
+        "entity_ids": { "type": "array", "items": { "type": "string" }, "description": "for mutations, the frozen member_ids acted on" },
+        "config_ref": { "type": "string", "description": "for config_* actions, the standing object's id" }
+      }
+    },
+
+    "change_set": {
+      "type": "array",
+      "description": "per-entity before/after — the actual delta a mutation produced",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entity_id", "field", "before", "after"],
+        "properties": {
+          "entity_id": { "type": "string" },
+          "field": { "type": "string", "description": "e.g. status, daily_budget" },
+          "before": {},
+          "after": {}
+        }
+      }
+    },
+
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "decided_by"],
+      "properties": {
+        "verdict": { "type": "string", "enum": ["granted", "denied"] },
+        "decided_by": { "type": "string", "description": "principal_ref of the approver" },
+        "policy": { "type": "string", "description": "which approval rule required this (e.g. risk=high)" },
+        "rationale": { "type": "string" },
+        "steps_completed": { "type": "integer", "minimum": 1, "description": "for critical/multi-step approvals" }
+      }
+    },
+
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "type": "string", "enum": ["ok", "partial", "error"] },
+        "affected_count": { "type": "integer", "minimum": 0 },
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message"],
+          "properties": {
+            "code": { "type": "string" },
+            "message": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

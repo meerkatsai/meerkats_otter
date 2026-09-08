@@ -1,0 +1,18 @@
+# Render blueprint. In Render: New → Blueprint → point at the repo containing this file.
+# Neon is NOT provisioned by Render — create it separately (see README-deploy.md)
+# and paste its app_writer connection string into DATABASE_URL below (kept secret).
+services:
+  - type: web
+    name: meerkats-dsl
+    runtime: node
+    plan: starter
+    rootDir: service
+    buildCommand: npm ci
+    startCommand: node server.mjs
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        sync: false        # set in the Render dashboard to your Neon app_writer URL
+      - key: NODE_VERSION
+        value: "20"

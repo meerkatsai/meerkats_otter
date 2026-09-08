@@ -1,0 +1,336 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meerkats.ai/schemas/query_and_act/v1.json",
+  "title": "Meerkats query_and_act v1 — deterministic query + action + shared vocabulary",
+  "description": "Structural (phase-1) validation only. A second phase (semantic validator against the RDF/SHACL + MetricFlow catalog) confirms every metric/dimension reference resolves and is the correct kind. Tenant/account scope is injected server-side and is deliberately NOT a field here; additionalProperties:false enforces that the LLM cannot introduce one.",
+
+  "oneOf": [
+    { "$ref": "#/$defs/query_task" },
+    { "$ref": "#/$defs/action_task" }
+  ],
+
+  "$defs": {
+    "operator": {
+      "type": "string",
+      "enum": ["eq", "neq", "lt", "lte", "gt", "gte", "contains", "in", "not_in", "between"]
+    },
+
+    "predicate_value_constraints": {
+      "description": "Shared operator/value shape rules. between => 2-tuple; in/not_in => non-empty array; contains => string.",
+      "allOf": [
+        {
+          "if": { "properties": { "operator": { "const": "between" } }, "required": ["operator"] },
+          "then": { "properties": { "value": { "type": "array", "minItems": 2, "maxItems": 2 } } }
+        },
+        {
+          "if": { "properties": { "operator": { "enum": ["in", "not_in"] } }, "required": ["operator"] },
+          "then": { "properties": { "value": { "type": "array", "minItems": 1 } } }
+        },
+        {
+          "if": { "properties": { "operator": { "const": "contains" } }, "required": ["operator"] },
+          "then": { "properties": { "value": { "type": "string" } } }
+        }
+      ]
+    },
+
+    "dimension_predicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dimension", "operator", "value"],
+      "description": "Pre-aggregation filter (SQL WHERE). Left-hand side MUST be a catalog dimension. Semantic validator rejects it if 'dimension' resolves to a metric.",
+      "properties": {
+        "dimension": { "type": "string" },
+        "operator": { "$ref": "#/$defs/operator" },
+        "value": {}
+      },
+      "$ref": "#/$defs/predicate_value_constraints"
+    },
+
+    "metric_predicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metric", "operator", "value"],
+      "description": "Post-aggregation filter (SQL HAVING). Left-hand side MUST be a catalog metric. Semantic validator rejects it if 'metric' resolves to a dimension. This is the where/having split: separate stages, separate keys.",
+      "properties": {
+        "metric": { "type": "string" },
+        "operator": { "$ref": "#/$defs/operator" },
+        "value": {}
+      },
+      "$ref": "#/$defs/predicate_value_constraints"
+    },
+
+    "time_range": {
+      "type": "object",
+      "oneOf": [
+        {
+          "properties": {
+            "type": { "const": "relative" },
+            "value": { "type": "integer", "minimum": 1 },
+            "unit": { "type": "string", "enum": ["day", "week", "month", "quarter", "year"] }
+          },
+          "required": ["type", "value", "unit"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["today", "yesterday", "this_week", "last_week", "this_month", "last_month", "this_quarter", "last_quarter", "this_year", "last_year"]
+            }
+          },
+          "required": ["type"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "type": { "const": "custom" },
+            "start": { "type": "string", "format": "date" },
+            "end": { "type": "string", "format": "date" }
+          },
+          "required": ["type", "start", "end"],
+          "additionalProperties": false
+        }
+      ]
+    },
+
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metric", "baseline"],
+      "properties": {
+        "metric": { "type": "string" },
+        "baseline": {
+          "description": "Either 'previous_period' (derived by shifting the query's time_range back one full period — requires time_range to be set, enforced at query level) or an explicit time_range to compare against.",
+          "oneOf": [
+            { "type": "string", "const": "previous_period" },
+            { "$ref": "#/$defs/time_range" }
+          ]
+        }
+      }
+    },
+
+    "sort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metric", "direction"],
+      "properties": {
+        "metric": { "type": "string" },
+        "direction": { "type": "string", "enum": ["asc", "desc"] }
+      }
+    },
+
+    "query_task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "task_type", "task"],
+      "properties": {
+        "version": { "const": "1.0" },
+        "task_type": { "const": "query" },
+        "task": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["entity", "metrics"],
+          "properties": {
+            "entity": { "type": "string" },
+            "metrics": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+            "dimensions": { "type": "array", "items": { "type": "string" } },
+            "where": {
+              "type": "array",
+              "description": "Dimension predicates, ANDed. Pre-aggregation.",
+              "items": { "$ref": "#/$defs/dimension_predicate" }
+            },
+            "having": {
+              "type": "array",
+              "description": "Metric predicates, ANDed. Post-aggregation.",
+              "items": { "$ref": "#/$defs/metric_predicate" }
+            },
+            "time_range": { "$ref": "#/$defs/time_range" },
+            "comparison": { "$ref": "#/$defs/comparison" },
+            "sort": { "$ref": "#/$defs/sort" },
+            "limit": { "type": "integer", "minimum": 1 }
+          },
+          "allOf": [
+            {
+              "description": "comparison against previous_period is meaningless without an anchor.",
+              "if": {
+                "required": ["comparison"],
+                "properties": { "comparison": { "properties": { "baseline": { "const": "previous_period" } }, "required": ["baseline"] } }
+              },
+              "then": { "required": ["time_range"] }
+            }
+          ]
+        }
+      }
+    },
+
+    "selection_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entity"],
+      "description": "What the LLM/planner emits to describe WHICH entities. Never executed directly by an action — it is handed to the resolver, which freezes it into a resolved_selection.",
+      "properties": {
+        "entity": { "type": "string" },
+        "where": { "type": "array", "items": { "$ref": "#/$defs/dimension_predicate" } },
+        "having": { "type": "array", "items": { "$ref": "#/$defs/metric_predicate" } },
+        "time_range": { "$ref": "#/$defs/time_range" }
+      }
+    },
+
+    "resolved_selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selection_id", "entity", "resolved_at", "member_ids", "member_count", "source_selection"],
+      "description": "SERVER-PRODUCED artifact, immutable. The resolver runs selection_request once and freezes the result. Actions bind to selection_id and execute against member_ids — never by re-running the filter (closes the time-of-check/time-of-use gap).",
+      "properties": {
+        "selection_id": { "type": "string", "format": "uuid" },
+        "entity": { "type": "string" },
+        "resolved_at": { "type": "string", "format": "date-time" },
+        "data_as_of": { "type": "string", "format": "date-time", "description": "Freshness of the warehouse data the snapshot was computed against." },
+        "catalog_version": { "type": "string" },
+        "expires_at": { "type": "string", "format": "date-time", "description": "After this, the snapshot is not executable and must be re-resolved + re-approved." },
+        "source_selection": { "$ref": "#/$defs/selection_request" },
+        "member_ids": { "type": "array", "items": { "type": "string" } },
+        "member_count": { "type": "integer", "minimum": 0 },
+        "snapshot_metrics": {
+          "type": "array",
+          "description": "Per-member metric values captured at resolve time. Powers the approval UI and lets the execution engine detect drift between approval and execution.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["member_id", "values"],
+            "properties": {
+              "member_id": { "type": "string" },
+              "values": { "type": "object", "additionalProperties": { "type": "number" } }
+            }
+          }
+        }
+      }
+    },
+
+    "action_task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "task_type", "task"],
+      "properties": {
+        "version": { "const": "1.0" },
+        "task_type": { "const": "action" },
+        "task": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["selection_ref", "operation"],
+          "description": "Note the absence of any 'select'/'where'/'having'/'filters' key — additionalProperties:false makes selection-inside-action structurally impossible. The action can only reference a pre-resolved snapshot.",
+          "properties": {
+            "selection_ref": { "type": "string", "format": "uuid", "description": "= resolved_selection.selection_id" },
+            "operation": { "$ref": "#/$defs/operation" },
+            "on_drift": {
+              "type": "string",
+              "enum": ["proceed", "abort", "re_approve"],
+              "default": "re_approve",
+              "description": "What execution does if live metrics have moved past threshold vs snapshot_metrics."
+            }
+          }
+        }
+      }
+    },
+
+    "operation": {
+      "type": "object",
+      "oneOf": [
+        { "properties": { "type": { "const": "pause" } }, "required": ["type"], "additionalProperties": false },
+        { "properties": { "type": { "const": "resume" } }, "required": ["type"], "additionalProperties": false },
+        {
+          "properties": {
+            "type": { "const": "increase_budget" },
+            "amount": { "$ref": "#/$defs/amount" }
+          },
+          "required": ["type", "amount"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "type": { "const": "set_budget" },
+            "amount": { "$ref": "#/$defs/amount_absolute" }
+          },
+          "required": ["type", "amount"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "type": { "const": "adjust_bid" },
+            "amount": { "$ref": "#/$defs/amount" }
+          },
+          "required": ["type", "amount"],
+          "additionalProperties": false
+        }
+      ]
+    },
+
+    "amount": {
+      "type": "object",
+      "oneOf": [
+        {
+          "properties": { "type": { "const": "percentage" }, "value": { "type": "number" } },
+          "required": ["type", "value"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "type": { "const": "absolute" },
+            "value": { "type": "number" },
+            "currency": { "type": "string", "description": "ISO 4217, e.g. INR" }
+          },
+          "required": ["type", "value", "currency"],
+          "additionalProperties": false
+        }
+      ]
+    },
+
+    "amount_absolute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "value", "currency"],
+      "properties": {
+        "type": { "const": "absolute" },
+        "value": { "type": "number", "minimum": 0 },
+        "currency": { "type": "string" }
+      }
+    },
+
+    "execution_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selection", "action", "risk"],
+      "description": "SERVER-PRODUCED binding of a resolved_selection to an action_task. Risk is computed HERE — post-resolver — from operation type × member_count × magnitude, which is why it can't live on the LLM-emitted action. Approval policy keys off risk_level.",
+      "properties": {
+        "selection": { "$ref": "#/$defs/resolved_selection" },
+        "action": { "$ref": "#/$defs/action_task" },
+        "risk": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["risk_level"],
+          "properties": {
+            "risk_level": { "type": "string", "enum": ["read_only", "low", "medium", "high", "critical"] },
+            "factors": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "member_count": { "type": "integer" },
+                "magnitude": { "type": "number", "description": "e.g. budget delta as a fraction; 0.2 for +20%" },
+                "reversible": { "type": "boolean" }
+              }
+            }
+          }
+        },
+        "approval_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["required"],
+          "properties": {
+            "required": { "type": "boolean" },
+            "steps": { "type": "integer", "minimum": 1, "description": "critical => multi-step" }
+          }
+        }
+      }
+    }
+  }
+}

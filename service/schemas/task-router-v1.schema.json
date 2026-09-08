@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meerkats.ai/schemas/task-router/v1.json",
+  "title": "Meerkats Task Router v1 — MECE intent taxonomy",
+  "description": "Top of the DSL. Every request is exactly one task_type, drawn from seven intents across three families. This is the router that runs before schema-constrained generation; intent misclassification surfaces here. MECE: the root oneOf admits exactly one branch per task_type (mutually exclusive) and the seven branches are the complete set (collectively exhaustive). Composition: query_and_act tasks (query, action) ref query_and_act/v1; diagnosis refs diagnose_and_recommend/v1; simulation, recommendation, alert, workflow are enveloped here. All cross-referenced schemas must be registered in the validator.",
+
+  "x-intent-families": {
+    "query_and_act": {
+      "determinism": "deterministic — one validated instance, no LLM pass",
+      "intents": ["query", "action"]
+    },
+    "diagnose_and_recommend": {
+      "determinism": "agentic — on-demand, read-only cognition",
+      "intents": ["diagnosis", "simulation", "recommendation"]
+    },
+    "workflows_and_automations": {
+      "determinism": "agentic — standing process",
+      "intents": ["alert", "workflow"]
+    }
+  },
+
+  "oneOf": [
+    { "$ref": "#/$defs/query_task" },
+    { "$ref": "#/$defs/action_task" },
+    { "$ref": "#/$defs/diagnosis_task" },
+    { "$ref": "#/$defs/simulation_task" },
+    { "$ref": "#/$defs/recommendation_task" },
+    { "$ref": "#/$defs/alert_task" },
+    { "$ref": "#/$defs/workflow_task" }
+  ],
+
+  "$defs": {
+
+    "query_task": {
+      "$comment": "family: query_and_act — deterministic, read-only",
+      "$ref": "https://meerkats.ai/schemas/query_and_act/v1.json#/$defs/query_task"
+    },
+
+    "action_task": {
+      "$comment": "family: query_and_act — deterministic, WRITE. One of the only two mutating intents; carries the full execution_plan/approval machinery.",
+      "$ref": "https://meerkats.ai/schemas/query_and_act/v1.json#/$defs/action_task"
+    },
+
+    "diagnosis_task": {
+      "$comment": "family: diagnose_and_recommend — read-only. Full request/result contract lives in diagnose_and_recommend/v1.",
+      "$ref": "https://meerkats.ai/schemas/diagnose_and_recommend/v1.json#/$defs/diagnosis_request"
+    },
+
+    "simulation_task": {
+      "$comment": "family: diagnose_and_recommend — read-only, projects forward. change absent = baseline forecast; change present = counterfactual. One intent, two modes.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "task_type", "task"],
+      "properties": {
+        "version": { "const": "1.0" },
+        "task_type": { "const": "simulation" },
+        "task": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["metric", "horizon"],
+          "properties": {
+            "entity": { "type": "string" },
+            "metric": { "type": "string", "description": "metric to project" },
+            "horizon": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["value", "unit"],
+              "description": "forward projection window",
+              "properties": {
+                "value": { "type": "integer", "minimum": 1 },
+                "unit": { "type": "string", "enum": ["day", "week", "month", "quarter"] }
+              }
+            },
+            "change": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["lever", "value", "unit"],
+              "description": "the intervention being simulated. OMIT for a baseline forecast.",
+              "properties": {
+                "lever": { "type": "string", "description": "what is changed, e.g. budget, bid" },
+                "value": { "type": "number" },
+                "unit": { "type": "string", "enum": ["percent", "absolute"] },
+                "select": {
+                  "$ref": "https://meerkats.ai/schemas/query_and_act/v1.json#/$defs/selection_request",
+                  "description": "which entities the change applies to"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "recommendation_task": {
+      "$comment": "family: diagnose_and_recommend — read-only itself. EMITS proposals (each = selection + action + projected impact) that enter the approval queue; executes nothing.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "task_type", "task"],
+      "properties": {
+        "version": { "const": "1.0" },
+        "task_type": { "const": "recommendation" },
+        "task": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["objective"],
+          "properties": {
+            "objective": { "type": "string", "description": "goal to optimize, e.g. improve_roas, reduce_cac" },
+            "entity": { "type": "string" },
+            "scope": {
+              "$ref": "https://meerkats.ai/schemas/query_and_act/v1.json#/$defs/selection_request",
+              "description": "entities the recommender may act over"
+            },
+            "constraints": {
+              "type": "array",
+              "description": "bounds on the search, expressed in the same metric-predicate vocabulary as having",
+              "items": { "$ref": "https://meerkats.ai/schemas/query_and_act/v1.json#/$defs/metric_predicate" }
+            }
+          }
+        }
+      }
+    },
+
+    "alert_task": {
+      "$comment": "family: workflows_and_automations — standing, read-only. Never mutates, never needs approval. condition reuses metric_predicate.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "task_type", "task"],
+      "properties": {
+        "version": { "const": "1.0" },
+        "task_type": { "const": "alert" },
+        "task": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["entity", "condition"],
+          "properties": {
+            "entity": { "type": "string" },
+            "condition": {
+              "$ref": "https://meerkats.ai/schemas/query_and_act/v1.json#/$defs/metric_predicate",
+              "description": "when this predicate holds, the alert fires"
+            },
+            "time_window": { "$ref": "https://meerkats.ai/schemas/query_and_act/v1.json#/$defs/time_range" },
+            "evaluate_every": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["value", "unit"],
+              "properties": {
+                "value": { "type": "integer", "minimum": 1 },
+                "unit": { "type": "string", "enum": ["minute", "hour", "day"] }
+              }
+            },
+            "notify": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["channels"],
+              "properties": {
+                "channels": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "workflow_task": {
+      "$comment": "family: workflows_and_automations — standing, WRITE. The only autonomous mutator. Each step mutates through the SAME selection_request + operation vocabulary as action; guardrails/approval apply per step, per resolved selection.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "task_type", "task"],
+      "properties": {
+        "version": { "const": "1.0" },
+        "task_type": { "const": "workflow" },
+        "task": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["trigger", "steps"],
+          "properties": {
+            "trigger": {
+              "type": "object",
+              "oneOf": [
+                {
+                  "required": ["schedule"],
+                  "additionalProperties": false,
+                  "properties": { "schedule": { "type": "string", "enum": ["hourly", "daily", "weekly"] } }
+                },
+                {
+                  "required": ["event"],
+                  "additionalProperties": false,
+                  "properties": { "event": { "type": "string" } }
+                }
+              ]
+            },
+            "steps": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/workflow_step" }
+            }
+          }
+        }
+      }
+    },
+
+    "workflow_step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["select", "operation"],
+      "description": "A mutating step. select resolves to a snapshot at run time; operation executes against it under the same on_drift/approval rules as a standalone action.",
+      "properties": {
+        "select": { "$ref": "https://meerkats.ai/schemas/query_and_act/v1.json#/$defs/selection_request" },
+        "operation": { "$ref": "https://meerkats.ai/schemas/query_and_act/v1.json#/$defs/operation" },
+        "on_drift": { "type": "string", "enum": ["proceed", "abort", "re_approve"], "default": "re_approve" }
+      }
+    }
+  }
+}
