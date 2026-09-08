@@ -106,6 +106,39 @@ export async function getTraceSummary(trace_id) {
   return rows[0] ?? null;
 }
 
+const AUDIT_COLUMNS = `event_id, tenant_ref, seq, recorded_at, prev_hash, hash, trace_id,
+  action, actor, subject, risk_level, task_ref, execution_plan_ref,
+  resolved_selection_ref, change, decision, outcome`;
+
+// List a tenant's audit events, newest first, paginated on seq. Pass
+// `before` (a seq value, typically the previous page's last row) to page
+// further back in time.
+export async function listAuditEvents(tenant_ref, { limit = 50, before } = {}) {
+  const cappedLimit = Math.min(Math.max(Number(limit) || 50, 1), 500);
+  const params = [tenant_ref];
+  let where = "tenant_ref = $1";
+  if (before !== undefined && before !== null && !Number.isNaN(before)) {
+    params.push(before);
+    where += ` AND seq < $${params.length}`;
+  }
+  params.push(cappedLimit);
+  const { rows } = await pool.query(
+    `SELECT ${AUDIT_COLUMNS} FROM audit_events
+      WHERE ${where} ORDER BY seq DESC LIMIT $${params.length}`,
+    params
+  );
+  return rows;
+}
+
+// Fetch a single audit event by id (globally unique primary key).
+export async function getAuditEvent(event_id) {
+  const { rows } = await pool.query(
+    `SELECT ${AUDIT_COLUMNS} FROM audit_events WHERE event_id = $1`,
+    [event_id]
+  );
+  return rows[0] ?? null;
+}
+
 // Walk a tenant's chain and fully recompute every hash + prev-link.
 export async function verifyChain(tenant_ref) {
   const { rows } = await pool.query(

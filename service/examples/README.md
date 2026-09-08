@@ -16,6 +16,22 @@ matches the DSL grammar — it does **not** confirm field names (`platform`,
 the separate phase-2 semantic validator described in `query_and_act-v1`'s
 top-level `description`, which this service does not implement yet.
 
+`audit-all.mjs` pushes every mapping through `/audit` as a `task_submitted`
+event (one shared hash chain, so `/audit/verify` proves nothing was
+dropped/reordered) and prints the event_id -> case id mapping for
+cross-checking actual row content:
+
+```bash
+node service/examples/audit-all.mjs                                          # live, tenant=acct_client_test
+node service/examples/audit-all.mjs http://localhost:8099 acct_my_tenant     # local, custom tenant
+```
+
+Note: audit is designed for *mutating* events — per `audit-log-v1`'s own
+description, "mutation is confined to the action and workflow intents", so
+production wouldn't normally audit read-only `query` tasks like these 26.
+This script exists to exercise the audit plumbing (append, chain integrity,
+content correctness) against realistic payloads, not to model real usage.
+
 ## Confirmed schema gaps (not mapping mistakes — the grammar itself can't say this)
 
 1. **Compound / cross-dimension "OR" prompts** (id `10a`/`10b`) — a single

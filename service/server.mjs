@@ -4,7 +4,14 @@ import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { appendAudit, verifyChain, upsertTraceSummary, getTraceSummary } from "./db.mjs";
+import {
+  appendAudit,
+  verifyChain,
+  upsertTraceSummary,
+  getTraceSummary,
+  listAuditEvents,
+  getAuditEvent,
+} from "./db.mjs";
 
 const dir = fileURLToPath(new URL("./schemas/", import.meta.url));
 
@@ -22,6 +29,7 @@ for (const f of readdirSync(dir).filter((f) => f.endsWith(".schema.json"))) {
 }
 const validateTask = ajv.getSchema(routerId);
 const validateTrace = ajv.getSchema("https://meerkats.ai/schemas/task-trace/v1.json");
+const validateAuditEvent = ajv.getSchema("https://meerkats.ai/schemas/audit-log/v1.json");
 
 const app = Fastify({ logger: true });
 
@@ -46,6 +54,23 @@ app.post("/audit", async (req, reply) => {
   const e = req.body ?? {};
   if (!e.event_id || !e.tenant_ref || !e.action || !e.actor || !e.subject)
     return reply.code(400).send({ error: "event_id, tenant_ref, action, actor, subject required" });
+
+  // Validate the client-supplied shape against audit-log-v1. seq/recorded_at/
+  // prev_hash/hash are required by the schema but are server-computed, never
+  // client input (see appendAudit) — stage them with placeholders purely so
+  // ajv can check everything that IS client-supplied: the action enum,
+  // actor/subject shape, and the allOf rules (execution_* needs
+  // resolved_selection_ref, approval_* needs decision).
+  const staged = {
+    ...e,
+    seq: 0,
+    recorded_at: new Date().toISOString(),
+    prev_hash: null,
+    hash: "sha256:staged",
+  };
+  const ok = validateAuditEvent(staged);
+  if (!ok) return reply.code(422).send({ valid: false, errors: validateAuditEvent.errors });
+
   try {
     const r = await appendAudit(e);
     return reply.code(201).send(r);
@@ -60,6 +85,25 @@ app.get("/audit/verify", async (req, reply) => {
   const t = req.query.tenant;
   if (!t) return reply.code(400).send({ error: "tenant required" });
   return verifyChain(t);
+});
+
+// List a tenant's audit events, newest first. Cursor-paginated on seq:
+// pass the response's next_cursor back as ?before= to page further back.
+app.get("/audit", async (req, reply) => {
+  const t = req.query.tenant;
+  if (!t) return reply.code(400).send({ error: "tenant required" });
+  const limit = req.query.limit ? Number(req.query.limit) : 50;
+  const before = req.query.before !== undefined ? Number(req.query.before) : undefined;
+  const events = await listAuditEvents(t, { limit, before });
+  const next_cursor = events.length === limit ? events[events.length - 1].seq : null;
+  return { events, next_cursor };
+});
+
+// Fetch a single audit event by id (globally unique — no tenant needed).
+app.get("/audit/:event_id", async (req, reply) => {
+  const r = await getAuditEvent(req.params.event_id);
+  if (!r) return reply.code(404).send({ error: "not found" });
+  return r;
 });
 
 // Record one request's trace: validate the full trajectory against
