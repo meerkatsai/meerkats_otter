@@ -35,9 +35,15 @@ export async function appendAudit(evt) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    // Serialize concurrent appends per tenant with an advisory lock rather
+    // than SELECT ... FOR UPDATE: row-level locking clauses need the UPDATE
+    // privilege, which app_writer deliberately doesn't have (see
+    // migrations/001_init.sql — immutability layer 1). The lock is
+    // transaction-scoped and releases automatically at COMMIT/ROLLBACK.
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [evt.tenant_ref]);
     const { rows } = await client.query(
       `SELECT seq, hash FROM audit_events
-        WHERE tenant_ref = $1 ORDER BY seq DESC LIMIT 1 FOR UPDATE`,
+        WHERE tenant_ref = $1 ORDER BY seq DESC LIMIT 1`,
       [evt.tenant_ref]
     );
     const prev = rows[0] ?? null;
@@ -73,6 +79,31 @@ export async function appendAudit(evt) {
   } finally {
     client.release();
   }
+}
+
+// Upsert the one-row-per-request trace summary (full span firehose goes to
+// the telemetry backend, not here — see migrations/001_init.sql).
+export async function upsertTraceSummary(s) {
+  const { rows } = await pool.query(
+    `INSERT INTO trace_summary (trace_id, tenant_ref, task_type, status, latency_ms, output_ref)
+       VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (trace_id) DO UPDATE SET
+       status = EXCLUDED.status,
+       latency_ms = EXCLUDED.latency_ms,
+       output_ref = EXCLUDED.output_ref
+     RETURNING trace_id, tenant_ref, task_type, status, latency_ms, output_ref, created_at`,
+    [s.trace_id, s.tenant_ref, s.task_type, s.status, s.latency_ms ?? null, s.output_ref ?? null]
+  );
+  return rows[0];
+}
+
+export async function getTraceSummary(trace_id) {
+  const { rows } = await pool.query(
+    `SELECT trace_id, tenant_ref, task_type, status, latency_ms, output_ref, created_at
+       FROM trace_summary WHERE trace_id = $1`,
+    [trace_id]
+  );
+  return rows[0] ?? null;
 }
 
 // Walk a tenant's chain and fully recompute every hash + prev-link.
