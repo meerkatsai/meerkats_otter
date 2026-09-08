@@ -20,6 +20,7 @@
         "hash": { "type": "string", "description": "digest over this event's canonical serialization EXCLUDING hash and signature; links the chain" },
         "signature": { "type": "string", "description": "optional detached cryptographic signature over hash, for non-repudiation" },
         "trace_id": { "type": "string", "format": "uuid", "description": "correlates to the task-trace for the same request" },
+        "user_query": { "type": "string", "description": "the raw human-language request that produced this event, if any (e.g. the chat utterance). Optional — many audited events (config changes, workflow steps) have no literal user text behind them." },
         "action": {
           "type": "string",
           "enum": ["task_submitted", "approval_requested", "approval_granted", "approval_denied", "selection_resolved", "execution_started", "execution_completed", "execution_failed", "config_created", "config_updated", "config_paused", "config_deleted"]

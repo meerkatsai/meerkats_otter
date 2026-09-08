@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Meerkats DSL</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+</style>
+</head>
+<body class="bg-gray-50 text-gray-900">
+
+<header class="sticky top-0 z-10 flex items-center gap-3 border-b border-gray-200 bg-white px-5 py-3">
+  <span id="health-dot" class="h-2 w-2 flex-none rounded-full bg-gray-300"></span>
+  <h1 class="text-sm font-semibold">meerkats_otter <span id="health-label" class="font-normal text-gray-400">connecting…</span></h1>
+  <nav class="ml-auto flex gap-1">
+    <button data-panel="audit" class="nav-btn rounded-md px-3 py-1.5 text-sm font-medium bg-gray-100 text-gray-900">Audit</button>
+    <button data-panel="traces" class="nav-btn rounded-md px-3 py-1.5 text-sm font-medium text-gray-500 hover:text-gray-900">Traces</button>
+    <button data-panel="schemas" class="nav-btn rounded-md px-3 py-1.5 text-sm font-medium text-gray-500 hover:text-gray-900">Schemas</button>
+    <button data-panel="validate" class="nav-btn rounded-md px-3 py-1.5 text-sm font-medium text-gray-500 hover:text-gray-900">Validate</button>
+  </nav>
+</header>
+
+<main class="mx-auto max-w-5xl px-5 py-6">
+
+  <div class="mb-4 flex flex-wrap items-center gap-2">
+    <input type="text" id="tenant" placeholder="tenant_ref, e.g. acct_client_test"
+      class="mono min-w-[240px] rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+    <button id="load-btn" class="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700">Load</button>
+    <button id="verify-btn" class="rounded-md border border-gray-300 bg-white px-4 py-1.5 text-sm font-medium hover:bg-gray-50">Verify chain</button>
+    <span id="verify-result" class="text-sm"></span>
+  </div>
+
+  <section id="panel-audit" class="panel">
+    <div class="overflow-x-auto rounded-lg border border-gray-200 bg-white">
+      <table class="w-full text-left text-xs">
+        <thead class="border-b border-gray-200 bg-gray-50 text-gray-500">
+          <tr>
+            <th class="whitespace-nowrap px-3 py-2 font-medium">seq</th>
+            <th class="whitespace-nowrap px-3 py-2 font-medium">recorded_at</th>
+            <th class="whitespace-nowrap px-3 py-2 font-medium">action</th>
+            <th class="whitespace-nowrap px-3 py-2 font-medium">entity</th>
+            <th class="whitespace-nowrap px-3 py-2 font-medium">user_query</th>
+            <th class="whitespace-nowrap px-3 py-2 font-medium">type</th>
+            <th class="whitespace-nowrap px-3 py-2 font-medium">hash</th>
+          </tr>
+        </thead>
+        <tbody id="audit-rows"></tbody>
+      </table>
+    </div>
+    <div id="audit-empty" class="hidden py-8 text-center text-sm text-gray-400">No audit events for this tenant yet.</div>
+    <div class="mt-3 flex justify-center">
+      <button id="audit-more" class="hidden rounded-md border border-gray-300 bg-white px-4 py-1.5 text-sm hover:bg-gray-50">Load more</button>
+    </div>
+  </section>
+
+  <section id="panel-traces" class="panel hidden">
+    <div class="overflow-x-auto rounded-lg border border-gray-200 bg-white">
+      <table class="w-full text-left text-xs">
+        <thead class="border-b border-gray-200 bg-gray-50 text-gray-500">
+          <tr>
+            <th class="whitespace-nowrap px-3 py-2 font-medium">trace_id</th>
+            <th class="whitespace-nowrap px-3 py-2 font-medium">task_type</th>
+            <th class="whitespace-nowrap px-3 py-2 font-medium">status</th>
+            <th class="whitespace-nowrap px-3 py-2 font-medium">latency_ms</th>
+            <th class="whitespace-nowrap px-3 py-2 font-medium">output_ref</th>
+            <th class="whitespace-nowrap px-3 py-2 font-medium">created_at</th>
+          </tr>
+        </thead>
+        <tbody id="trace-rows"></tbody>
+      </table>
+    </div>
+    <div id="trace-empty" class="hidden py-8 text-center text-sm text-gray-400">No traces for this tenant yet.</div>
+    <div class="mt-3 flex justify-center">
+      <button id="trace-more" class="hidden rounded-md border border-gray-300 bg-white px-4 py-1.5 text-sm hover:bg-gray-50">Load more</button>
+    </div>
+  </section>
+
+  <section id="panel-schemas" class="panel hidden">
+    <div class="flex flex-col gap-2" id="schema-list"></div>
+    <pre id="schema-view" class="mono mt-3 hidden max-h-[420px] overflow-auto rounded-lg border border-gray-200 bg-white p-3 text-xs"></pre>
+  </section>
+
+  <section id="panel-validate" class="panel hidden">
+    <textarea id="validate-input" spellcheck="false"
+      class="mono h-56 w-full rounded-lg border border-gray-300 bg-white p-3 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+    <div class="mt-3">
+      <button id="validate-btn" class="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700">Validate</button>
+    </div>
+    <pre id="validate-result" class="mono mt-3 rounded-lg border border-gray-200 bg-white p-3 text-xs"></pre>
+  </section>
+
+</main>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+const TAG = "inline-block rounded-full border px-2 py-0.5 text-[11px] whitespace-nowrap";
+const tagClass = (kind) => {
+  if (kind === "ok") return `${TAG} border-emerald-300 bg-emerald-50 text-emerald-700`;
+  if (kind === "bad") return `${TAG} border-rose-300 bg-rose-50 text-rose-700`;
+  if (kind === "query") return `${TAG} border-blue-300 bg-blue-50 text-blue-700`;
+  return `${TAG} border-gray-200 bg-gray-50 text-gray-600`;
+};
+
+const TENANT_KEY = "otter_ui_tenant";
+$("#tenant").value = localStorage.getItem(TENANT_KEY) || "acct_client_test";
+
+let auditCursor = null, traceCursor = null;
+
+async function health() {
+  try {
+    const r = await fetch("/healthz").then((x) => x.json());
+    $("#health-dot").className = "h-2 w-2 flex-none rounded-full bg-emerald-500";
+    $("#health-label").textContent = `${r.schemas} schemas registered`;
+  } catch {
+    $("#health-dot").className = "h-2 w-2 flex-none rounded-full bg-rose-500";
+    $("#health-label").textContent = "unreachable";
+  }
+}
+
+function tenant() {
+  const t = $("#tenant").value.trim();
+  localStorage.setItem(TENANT_KEY, t);
+  return t;
+}
+
+function fmtTime(s) {
+  if (!s) return "";
+  return new Date(s).toISOString().replace("T", " ").replace(/\.\d+Z$/, "Z");
+}
+
+function taskTypeOf(row) {
+  return row.task_ref?.inline?.task_type || "";
+}
+
+const TD = "border-b border-gray-100 px-3 py-2 align-top";
+
+function auditRowHtml(row) {
+  const entity = row.subject?.entity_type || "";
+  const tt = taskTypeOf(row);
+  return `<tr class="hover:bg-gray-50">
+    <td class="${TD} mono text-gray-400">${row.seq}</td>
+    <td class="${TD} mono text-gray-400">${fmtTime(row.recorded_at)}</td>
+    <td class="${TD}"><span class="${tagClass()}">${esc(row.action)}</span></td>
+    <td class="${TD} mono">${esc(entity)}</td>
+    <td class="${TD} max-w-[260px] truncate" title="${esc(row.user_query || "")}">${row.user_query ? esc(row.user_query) : '<span class="text-gray-300">—</span>'}</td>
+    <td class="${TD}">${tt ? `<span class="${tagClass(tt === "alert" ? "bad" : "query")}">${esc(tt)}</span>` : '<span class="text-gray-300">—</span>'}</td>
+    <td class="${TD} mono text-gray-400" title="${esc(row.hash)}">${esc((row.hash || "").slice(0, 14))}…</td>
+  </tr>`;
+}
+
+async function loadAudit(reset = true) {
+  const t = tenant();
+  if (!t) return;
+  if (reset) { auditCursor = null; $("#audit-rows").innerHTML = ""; }
+  const url = `/audit?tenant=${encodeURIComponent(t)}&limit=25` + (auditCursor != null ? `&before=${auditCursor}` : "");
+  const r = await fetch(url).then((x) => x.json());
+  $("#audit-rows").insertAdjacentHTML("beforeend", r.events.map(auditRowHtml).join(""));
+  auditCursor = r.next_cursor;
+  $("#audit-more").classList.toggle("hidden", auditCursor == null);
+  $("#audit-empty").classList.toggle("hidden", $("#audit-rows").children.length > 0);
+}
+
+function traceRowHtml(row) {
+  return `<tr class="hover:bg-gray-50">
+    <td class="${TD} mono text-gray-400" title="${esc(row.trace_id)}">${esc(row.trace_id.slice(0, 8))}…</td>
+    <td class="${TD}"><span class="${tagClass("query")}">${esc(row.task_type || "")}</span></td>
+    <td class="${TD}"><span class="${tagClass(row.status === "ok" ? "ok" : row.status === "error" ? "bad" : "")}">${esc(row.status)}</span></td>
+    <td class="${TD} mono">${row.latency_ms ?? '<span class="text-gray-300">—</span>'}</td>
+    <td class="${TD} mono max-w-[220px] truncate text-gray-400">${row.output_ref ? esc(row.output_ref) : "—"}</td>
+    <td class="${TD} mono text-gray-400">${fmtTime(row.created_at)}</td>
+  </tr>`;
+}
+
+async function loadTraces(reset = true) {
+  const t = tenant();
+  if (!t) return;
+  if (reset) { traceCursor = null; $("#trace-rows").innerHTML = ""; }
+  const url = `/trace?tenant=${encodeURIComponent(t)}&limit=25` + (traceCursor ? `&before=${encodeURIComponent(traceCursor)}` : "");
+  const r = await fetch(url).then((x) => x.json());
+  $("#trace-rows").insertAdjacentHTML("beforeend", r.traces.map(traceRowHtml).join(""));
+  traceCursor = r.next_cursor;
+  $("#trace-more").classList.toggle("hidden", !traceCursor);
+  $("#trace-empty").classList.toggle("hidden", $("#trace-rows").children.length > 0);
+}
+
+async function verifyChain() {
+  const t = tenant();
+  if (!t) return;
+  const r = await fetch(`/audit/verify?tenant=${encodeURIComponent(t)}`).then((x) => x.json());
+  const el = $("#verify-result");
+  el.innerHTML = r.ok
+    ? `<span class="${tagClass("ok")}">chain OK — ${r.count} events</span>`
+    : `<span class="${tagClass("bad")}">BROKEN at seq ${r.broke_at}: ${esc(r.reason)}</span>`;
+}
+
+const SCHEMA_FAMILIES = ["task-router", "query_and_act", "diagnose_and_recommend", "audit-log", "task-trace"];
+
+async function loadSchemaList() {
+  $("#schema-list").innerHTML = SCHEMA_FAMILIES.map((f) =>
+    `<div class="schema-item cursor-pointer rounded-lg border border-gray-200 bg-white px-4 py-2.5 hover:border-gray-300" data-family="${f}">
+      <div class="mono font-semibold">${f}/v1.json</div>
+      <div class="text-xs text-gray-400">click to view</div>
+    </div>`
+  ).join("");
+  $$(".schema-item").forEach((el) => el.addEventListener("click", () => viewSchema(el.dataset.family)));
+}
+
+async function viewSchema(family) {
+  const s = await fetch(`/schemas/${family}/v1.json`).then((x) => x.json());
+  $("#schema-view").classList.remove("hidden");
+  $("#schema-view").textContent = JSON.stringify(s, null, 2);
+}
+
+$("#validate-input").value = JSON.stringify({
+  version: "1.0", task_type: "query",
+  task: { entity: "campaign", metrics: ["roas"], time_range: { type: "relative", value: 30, unit: "day" } }
+}, null, 2);
+
+async function runValidate() {
+  const out = $("#validate-result");
+  let body;
+  try { body = JSON.parse($("#validate-input").value); }
+  catch (e) { out.textContent = "Invalid JSON: " + e.message; return; }
+  const r = await fetch("/validate", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body)
+  });
+  out.textContent = JSON.stringify(await r.json(), null, 2);
+}
+
+$("#load-btn").addEventListener("click", () => { loadAudit(); loadTraces(); });
+$("#verify-btn").addEventListener("click", verifyChain);
+$("#audit-more").addEventListener("click", () => loadAudit(false));
+$("#trace-more").addEventListener("click", () => loadTraces(false));
+$("#validate-btn").addEventListener("click", runValidate);
+$("#tenant").addEventListener("keydown", (e) => { if (e.key === "Enter") { loadAudit(); loadTraces(); } });
+
+$$("nav button").forEach((btn) => btn.addEventListener("click", () => {
+  $$("nav button").forEach((b) => b.className = "nav-btn rounded-md px-3 py-1.5 text-sm font-medium text-gray-500 hover:text-gray-900");
+  btn.className = "nav-btn rounded-md px-3 py-1.5 text-sm font-medium bg-gray-100 text-gray-900";
+  $$(".panel").forEach((p) => p.classList.add("hidden"));
+  $("#panel-" + btn.dataset.panel).classList.remove("hidden");
+}));
+
+health();
+loadAudit();
+loadTraces();
+loadSchemaList();
+</script>
+</body>
+</html>

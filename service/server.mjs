@@ -9,11 +9,13 @@ import {
   verifyChain,
   upsertTraceSummary,
   getTraceSummary,
+  listTraceSummaries,
   listAuditEvents,
   getAuditEvent,
 } from "./db.mjs";
 
 const dir = fileURLToPath(new URL("./schemas/", import.meta.url));
+const indexHtml = readFileSync(fileURLToPath(new URL("./public/index.html", import.meta.url)), "utf8");
 
 // Load every *.schema.json, register in ajv, and index by $id path.
 const ajv = new Ajv2020({ allErrors: true, strict: false });
@@ -34,6 +36,10 @@ const validateAuditEvent = ajv.getSchema("https://meerkats.ai/schemas/audit-log/
 const app = Fastify({ logger: true });
 
 app.get("/healthz", async () => ({ ok: true, schemas: Object.keys(byPath).length }));
+
+// Small read-only dashboard for browsing audit/trace data and testing
+// /validate — served directly by this service (same-origin, no CORS needed).
+app.get("/", async (req, reply) => reply.type("text/html").send(indexHtml));
 
 // Serve each schema at its canonical $id path so cross-file $refs resolve over HTTP.
 app.get("/schemas/:family/v1.json", async (req, reply) => {
@@ -146,6 +152,19 @@ app.get("/trace/:id", async (req, reply) => {
   const r = await getTraceSummary(req.params.id);
   if (!r) return reply.code(404).send({ error: "not found" });
   return r;
+});
+
+// List a tenant's trace summaries, newest first. Cursor-paginated on
+// created_at: pass the response's next_cursor back as ?before= to page
+// further back.
+app.get("/trace", async (req, reply) => {
+  const t = req.query.tenant;
+  if (!t) return reply.code(400).send({ error: "tenant required" });
+  const limit = req.query.limit ? Number(req.query.limit) : 50;
+  const before = req.query.before || undefined;
+  const traces = await listTraceSummaries(t, { limit, before });
+  const next_cursor = traces.length === limit ? traces[traces.length - 1].created_at : null;
+  return { traces, next_cursor };
 });
 
 const port = Number(process.env.PORT) || 8080;
