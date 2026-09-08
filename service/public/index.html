@@ -374,10 +374,12 @@ function switchPanel(name) {
 
 $$("nav button").forEach((btn) => btn.addEventListener("click", () => switchPanel(btn.dataset.panel)));
 
-// Jump straight to the readable DSL reference from the Audit tab.
-$("#query-ref-link").addEventListener("click", () => {
-  switchPanel("schemas");
-  viewSchema(SCHEMA_ENTRIES.find((e) => e.kind === "yaml"));
+// Show the readable DSL reference right here on the Audit tab — same
+// shared modal used for trace/task detail — instead of navigating away.
+$("#query-ref-link").addEventListener("click", async () => {
+  openDetailModal("dsl-reference.yaml (readable)");
+  const text = await fetch("/schemas/dsl-reference.yaml").then((r) => r.text());
+  $("#detail-modal-body").textContent = text;
 });
 
 health();
