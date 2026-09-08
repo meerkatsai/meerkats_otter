@@ -267,5 +267,15 @@
         "dimensions": ["placement"],
         "time_range": { "type": "relative", "value": 30, "unit": "day" } }
     }
+  },
+  {
+    "id": "26",
+    "prompt": "roas for amazon in last 30 days",
+    "envelope": {
+      "version": "1.0", "task_type": "query",
+      "task": { "entity": "campaign", "metrics": ["roas"],
+        "where": [{ "dimension": "platform", "operator": "eq", "value": "amazon" }],
+        "time_range": { "type": "relative", "value": 30, "unit": "day" } }
+    }
   }
 ]
