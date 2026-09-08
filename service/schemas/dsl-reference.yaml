@@ -1,0 +1,313 @@
+# ==============================================================================
+# Meerkats Task DSL v1 — human-readable reference
+# ==============================================================================
+# This is documentation, NOT a schema — it is never loaded or validated
+# against at runtime. The single source of truth is the JSON Schema files in
+# this directory (*.schema.json), validated by ajv in service/server.mjs.
+# Every field name, required list, and enum below is verified 1:1 against:
+#   task-router-v1.schema.json, query_and_act-v1.schema.json,
+#   diagnose_and_recommend-v1.schema.json, audit-log-v1.schema.json
+# as of 2026-09-08. If this file and a .schema.json ever disagree, the
+# .schema.json is correct — fix this file to match, never the other way.
+#
+# Notation used below (not valid YAML data — a type sketch):
+#   <type>            a placeholder value of that type
+#   a|b|c              an enum — exactly one of these string values
+#   [<type>, ...]      an array of that type
+#   # required         marks a required field; unmarked fields are optional
+#   oneOf: {...}       exactly one of the listed variants, each with its own
+#                      additionalProperties:false — you cannot mix keys
+#                      across variants
+# ==============================================================================
+
+envelope:
+  version: "1.0"              # required, const — only value accepted today
+  task_type: <string>         # required, exactly one of the 7 below (MECE)
+  task: <object>               # required, shape depends on task_type — see below
+
+
+# ------------------------------------------------------------------------------
+# family: query_and_act — deterministic. One validated instance, no LLM pass.
+# schema: query_and_act-v1.schema.json
+# ------------------------------------------------------------------------------
+
+query:                          # task_type: query — READ ONLY, deterministic
+  task:
+    entity: <string>                        # required
+    metrics: [<string>, ...]                # required, min 1 item
+    dimensions: [<string>, ...]             # optional — group-by columns
+    where: [dimension_predicate, ...]       # optional — pre-aggregation filter (SQL WHERE), ANDed
+    having: [metric_predicate, ...]         # optional — post-aggregation filter (SQL HAVING), ANDed
+    time_range: time_range                  # optional
+    comparison: comparison                  # optional — baseline=previous_period REQUIRES time_range to also be set
+    sort: { metric: <string>, direction: asc|desc }   # optional
+    limit: <integer >=1>             # optional
+
+  example:
+    version: "1.0"
+    task_type: query
+    task:
+      entity: campaign
+      metrics: [roas]
+      where:
+        - { dimension: platform, operator: eq, value: amazon }
+      time_range: { type: relative, value: 30, unit: day }
+    # -> this is exactly the shape rendered by the dashboard's "query" column
+    #    (readable summary: "campaign · roas · platform=amazon · last 30d")
+
+action:                          # task_type: action — WRITE. One of only two mutating intents
+  task:
+    selection_ref: <uuid>                   # required — = resolved_selection.selection_id
+    operation: operation                    # required
+    on_drift: proceed|abort|re_approve      # optional, default re_approve
+  # NOTE: no where/having/select key exists here — additionalProperties:false
+  # makes selection-inside-action structurally impossible. An action can only
+  # reference a pre-resolved snapshot, never a fresh filter.
+
+
+# -- shared query_and_act vocabulary, used across all task_types below --------
+
+dimension_predicate:             # pre-aggregation filter. LHS must be a catalog dimension.
+  dimension: <string>            # required
+  operator: operator             # required
+  value: <any>                   # required — shape constrained by operator, see below
+
+metric_predicate:                # post-aggregation filter. LHS must be a catalog metric.
+  metric: <string>                # required
+  operator: operator              # required
+  value: <any>                    # required
+
+operator: eq|neq|lt|lte|gt|gte|contains|in|not_in|between
+  # value shape enforced per operator:
+  #   between   -> array of exactly 2 items
+  #   in/not_in -> non-empty array
+  #   contains  -> string
+  #   eq/neq/lt/lte/gt/gte -> unconstrained by the schema itself
+
+time_range:                      # oneOf 3 variants, each additionalProperties:false
+  oneOf:
+    relative: { type: relative, value: <integer >=1>, unit: day|week|month|quarter|year }
+    named:    { type: today|yesterday|this_week|last_week|this_month|last_month|this_quarter|last_quarter|this_year|last_year }
+    custom:   { type: custom, start: <date>, end: <date> }
+
+comparison:
+  metric: <string>                # required
+  baseline:                       # required, oneOf
+    oneOf: [previous_period, time_range]
+  # baseline=previous_period requires the enclosing task to ALSO set
+  # time_range (enforced by an allOf rule on query_task) — the shift needs
+  # an anchor period to shift back from.
+
+sort:
+  metric: <string>                 # required
+  direction: asc|desc              # required
+
+selection_request:                 # what a planner emits to describe WHICH entities.
+  entity: <string>                 # required     Never executed directly — handed to the
+  where: [dimension_predicate, ...]  #             resolver, which freezes it into a
+  having: [metric_predicate, ...]    #             resolved_selection.
+  time_range: time_range
+
+resolved_selection:                # SERVER-PRODUCED, immutable. NOT client-emitted.
+  selection_id: <uuid>                        # required
+  entity: <string>                            # required
+  resolved_at: <date-time>                    # required
+  data_as_of: <date-time>                     # optional — warehouse data freshness
+  catalog_version: <string>                   # optional
+  expires_at: <date-time>                     # optional — snapshot unusable after this
+  source_selection: selection_request         # required
+  member_ids: [<string>, ...]                 # required
+  member_count: <integer, minimum 0>          # required
+  snapshot_metrics:                           # optional — per-member values at resolve time
+    - member_id: <string>                     # required
+      values: { <metric_name>: <number>, ... }   # required
+
+operation:                         # oneOf 5 variants, each additionalProperties:false
+  oneOf:
+    pause:           { type: pause }
+    resume:          { type: resume }
+    increase_budget: { type: increase_budget, amount: amount }
+    set_budget:      { type: set_budget, amount: amount_absolute }
+    adjust_bid:      { type: adjust_bid, amount: amount }
+
+amount:                            # oneOf 2 variants
+  oneOf:
+    percentage: { type: percentage, value: <number> }
+    absolute:   { type: absolute, value: <number>, currency: <ISO 4217 currency code> }
+
+amount_absolute:                   # set_budget only — value must be >= 0, currency required
+  type: absolute
+  value: <number, minimum 0>
+  currency: <string>
+
+execution_plan:                    # SERVER-PRODUCED. Binds a resolved_selection to an
+  selection: resolved_selection    # action_task. Risk is computed HERE, post-resolver —
+  action: action                   # from operation type x member_count x magnitude — which
+  risk:                            # is why it can't live on the LLM-emitted action.
+    risk_level: read_only|low|medium|high|critical    # required
+    factors: { member_count: <integer>, magnitude: <number>, reversible: <boolean> }   # optional
+  approval_policy:                 # optional
+    required: <boolean>            # required (within approval_policy, if present)
+    steps: <integer >=1>    # optional — critical risk => multi-step
+
+
+# ------------------------------------------------------------------------------
+# family: diagnose_and_recommend — agentic, on-demand, read-only cognition
+# schemas: diagnose_and_recommend-v1.schema.json (diagnosis request+result),
+#          task-router-v1.schema.json (simulation, recommendation envelopes)
+# ------------------------------------------------------------------------------
+
+diagnosis:                         # task_type: diagnosis — explain a metric movement.
+  task:                            # NOT one query — a planner decomposes this into MANY
+    entity: <string>               # query_task instances (evidence) and reasons over them.
+    metric: <string>                          # required — the metric under investigation
+    comparison: comparison                    # required — defines the movement being explained
+    time_range: time_range                    # optional
+    objective: explain_change                 # optional, default & only enum value today
+    decompose_by: [<string>, ...]             # optional — prioritization hint (dimensions/factors)
+
+  result:                          # what the agent emits BACK — not part of the request
+    diagnosis_id: <uuid>                          # required
+    generated_at: <date-time>                     # required
+    observation:                                  # required — the confirmed movement (tree root)
+      metric: <string>
+      time_range: time_range
+      comparison: comparison
+      direction: increase|decrease
+      contribution: contribution     # at the root, delta_share is 1.0 by definition
+    status: explained|partially_explained|inconclusive|data_quality_blocked   # required
+    data_quality:                                 # required — precondition gate, checked BEFORE causes are asserted
+      status: clean|suspect|unchecked
+      checks: [{ name: <string>, result: pass|fail|warn, evidence_refs: [<string>, ...] }, ...]
+    root_cause_tree: [cause_node, ...]            # empty array when status=data_quality_blocked
+    primary_causes: [<cause_id string>, ...]      # ranked by |delta_share| among supported causes
+    evidence: [evidence_item, ...]                # required — re-runnable query_task + finding per item
+    unexplained_share: <number>                   # fraction of root delta not attributed to any cause
+
+  contribution:
+    delta_abs: <number>              # required — signed change attributed to this node
+    delta_share: <number>            # required — delta_abs as a fraction of the root's total delta
+    baseline_value: <number>
+    current_value: <number>
+
+  cause_node:                       # recurses via children into sub-causes
+    cause_id: <string>                            # required
+    statement: <string>                           # required — human-readable claim
+    kind: localization|factor|data_artifact|external|hypothesis   # required
+    contribution: contribution                    # required
+    confidence: <number, 0 to 1>                  # required — orthogonal to contribution
+    status: supported|ruled_out|unverified         # required
+    evidence_refs: [<evidence_id string>, ...]
+    decomposition: { method: dimensional|factor|none, by: [<string>, ...], additive: <boolean>, residual: <number> }
+    children: [cause_node, ...]
+
+  evidence_item:
+    evidence_id: <string>            # required
+    query: query_task                # required — the exact query the agent ran
+    finding: { summary: <string>, values: { <name>: <number>, ... } }   # required
+    data_as_of: <date-time>
+
+simulation:                        # task_type: simulation — forward projection.
+  task:                            # change absent = baseline forecast; change present =
+    metric: <string>               # counterfactual. One intent, two modes.
+    horizon: { value: <integer >=1>, unit: day|week|month|quarter }   # required
+    entity: <string>                              # optional
+    change:                                       # optional — OMIT for baseline, INCLUDE for counterfactual
+      lever: <string>                             # required (within change) — e.g. budget, bid
+      value: <number>                             # required
+      unit: percent|absolute                      # required
+      select: selection_request                   # which entities the change applies to
+
+recommendation:                    # task_type: recommendation — read-only itself; emits
+  task:                            # proposals (selection + action + projected impact) into
+    objective: <string>            # the approval queue. Executes nothing.
+    entity: <string>                              # optional
+    scope: selection_request                      # optional — entities the recommender may act over
+    constraints: [metric_predicate, ...]           # optional — bounds on the search
+
+
+# ------------------------------------------------------------------------------
+# family: workflows_and_automations — agentic, standing process
+# schema: task-router-v1.schema.json
+# ------------------------------------------------------------------------------
+
+alert:                             # task_type: alert — standing, READ-ONLY.
+  task:                            # Never mutates, never needs approval.
+    entity: <string>                              # required
+    condition: metric_predicate                   # required — fires when this predicate holds
+    time_window: time_range                       # optional
+    evaluate_every: { value: <integer >=1>, unit: minute|hour|day }   # optional
+    notify: { channels: [<string>, ...] }         # optional, min 1 channel if present
+
+workflow:                          # task_type: workflow — standing, WRITE.
+  task:                            # The only autonomous mutator.
+    trigger:                                      # required, oneOf
+      oneOf:
+        schedule: hourly|daily|weekly
+        event: <string>
+    steps:                                        # required, min 1 item
+      - select: selection_request                 # required — resolves to a snapshot at run time
+        operation: operation                      # required
+        on_drift: proceed|abort|re_approve         # optional, default re_approve
+
+
+# ------------------------------------------------------------------------------
+# audit-log-v1.schema.json — the append-only, hash-chained system of record.
+# Distinct from the DSL's request/response shapes above: this is what gets
+# written to the audit_events table as a SIDE EFFECT of task_submitted /
+# execution_* / approval_* / config_* events. Formally scoped to the action
+# and workflow intents (the only two that mutate) — this deployment also logs
+# query_submitted events for testing/observability, see service/examples/.
+# ------------------------------------------------------------------------------
+
+audit_event:
+  event_id: <uuid>                     # required
+  seq: <integer, minimum 0>            # required — server-assigned, monotonic per tenant
+  recorded_at: <date-time>             # required — server clock, never client-supplied
+  prev_hash: <string, or null>         # required — null only for the genesis event
+  hash: <string>                       # required — digest EXCLUDING hash and signature themselves
+  signature: <string>                  # optional — detached signature over hash
+  trace_id: <uuid>                     # optional — correlates to a task-trace for the same request
+  user_query: <string>                 # optional — the raw human-language request behind this
+                                        #            event (e.g. the chat utterance). This is what
+                                        #            the dashboard's "user_query" column shows.
+  action: task_submitted|approval_requested|approval_granted|approval_denied|selection_resolved|execution_started|execution_completed|execution_failed|config_created|config_updated|config_paused|config_deleted
+  actor:                               # required
+    kind: user|workflow|system                    # required
+    principal_ref: <string>                       # required — server-side id, never raw PII
+    auth_method: <string>                          # optional
+    on_behalf_of: <string>                         # optional — human who authorized a workflow/system actor
+    trigger: <string>                              # optional — schedule id or event that fired it
+  tenant_ref: <string>                 # required — server-injected scope, never client-supplied
+  subject:                             # required
+    entity_type: <string>                          # required — e.g. campaign, workflow, alert
+    entity_ids: [<string>, ...]                    # optional — frozen member_ids, for mutations
+    config_ref: <string>                           # optional — for config_* actions
+  risk_level: read_only|low|medium|high|critical   # optional — echoed from execution_plan
+  task_ref: artifact_ref               # optional — the task instance submitted. This is what
+                                        #            the dashboard's "query" column renders — see
+                                        #            the query.example above for its exact shape.
+  execution_plan_ref: artifact_ref     # optional
+  resolved_selection_ref: artifact_ref # optional — REQUIRED when action is execution_started/
+                                        #            completed/failed (allOf rule)
+  change:                              # optional — per-entity before/after delta a mutation produced
+    - entity_id: <string>                          # required
+      field: <string>                              # required — e.g. status, daily_budget
+      before: <any>
+      after: <any>
+  decision:                            # optional — REQUIRED when action is approval_granted/denied
+    verdict: granted|denied                        # required
+    decided_by: <string>                           # required — principal_ref of the approver
+    policy: <string>                               # optional — which rule required this
+    rationale: <string>                            # optional
+    steps_completed: <integer >=1>          # optional — for critical multi-step approvals
+  outcome:                             # optional
+    status: ok|partial|error                       # required (within outcome)
+    affected_count: <integer, minimum 0>           # optional
+    error: { code: <string>, message: <string> }   # optional
+
+artifact_ref:                          # pointer to a stored artifact, or a small inline payload
+  conforms_to: <string>                # schema $id the artifact validates against
+  ref: <string>                        # content address / URI of the stored artifact
+  inline: <any>                        # small payloads embedded directly instead of by ref
+  digest: <string>                     # hash of the artifact bytes
