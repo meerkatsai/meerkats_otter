@@ -211,8 +211,13 @@ function auditRowHtml(row) {
     <td class="${TD}"><span class="${tagClass()}">${esc(row.action)}</span></td>
     <td class="${TD} mono">${esc(entity)}</td>
     <td class="${TD} max-w-[220px] truncate">${row.user_query ? esc(row.user_query) : '<span class="text-gray-300">—</span>'}</td>
-    <td class="${TD} mono max-w-[280px] truncate">${row.task_ref
-      ? `<button class="view-task text-left text-blue-600 underline decoration-dotted hover:text-blue-800" data-event-id="${esc(row.event_id)}" title="${esc(summary)} — click for full JSON">${esc(summary)}</button>`
+    <td class="${TD} mono">${row.task_ref
+      ? `<div class="query-cell" data-event-id="${esc(row.event_id)}">
+           <button class="query-toggle flex items-start gap-1 text-left text-blue-600 hover:text-blue-800">
+             <span class="query-arrow text-gray-400">▸</span>
+             <span class="query-summary max-w-[260px] truncate">${esc(summary)}</span>
+           </button>
+         </div>`
       : '<span class="text-gray-300">—</span>'}</td>
     <td class="${TD}">${tt ? `<span class="${tagClass(tt === "alert" ? "bad" : "query")}">${esc(tt)}</span>` : '<span class="text-gray-300">—</span>'}</td>
     <td class="${TD}">${row.trace_id
@@ -247,13 +252,25 @@ async function openTraceModal(traceId) {
 }
 
 // The task router's emitted JSON — already stored in task_ref for every
-// audit row, this just makes it viewable next to the query that produced it.
-function openTaskModal(eventId) {
-  const taskRef = auditTaskRefs.get(eventId);
-  openDetailModal("routed task — " + eventId);
-  $("#detail-modal-body").textContent = taskRef
-    ? JSON.stringify(taskRef, null, 2)
-    : "This audit event has no task_ref attached.";
+// audit row. Expands in place under the summary instead of a modal, so you
+// keep your place in the table.
+function toggleQueryExpand(cell) {
+  const summaryEl = cell.querySelector(".query-summary");
+  const arrowEl = cell.querySelector(".query-arrow");
+  const existing = cell.querySelector(".query-full");
+  if (existing) {
+    existing.remove();
+    summaryEl.classList.add("truncate");
+    arrowEl.textContent = "▸";
+    return;
+  }
+  const taskRef = auditTaskRefs.get(cell.dataset.eventId);
+  summaryEl.classList.remove("truncate");
+  arrowEl.textContent = "▾";
+  const pre = document.createElement("pre");
+  pre.className = "query-full mono mt-1 max-w-[360px] max-h-[240px] overflow-auto rounded border border-gray-200 bg-gray-50 p-2 text-[11px] text-gray-700";
+  pre.textContent = taskRef ? JSON.stringify(taskRef, null, 2) : "This audit event has no task_ref attached.";
+  cell.appendChild(pre);
 }
 
 $("#detail-modal-close").addEventListener("click", closeDetailModal);
@@ -261,8 +278,8 @@ $("#detail-modal").addEventListener("click", (e) => { if (e.target.id === "detai
 $("#audit-rows").addEventListener("click", (e) => {
   const traceBtn = e.target.closest(".view-trace");
   if (traceBtn) return openTraceModal(traceBtn.dataset.traceId);
-  const taskBtn = e.target.closest(".view-task");
-  if (taskBtn) return openTaskModal(taskBtn.dataset.eventId);
+  const queryToggle = e.target.closest(".query-toggle");
+  if (queryToggle) return toggleQueryExpand(queryToggle.closest(".query-cell"));
 });
 
 async function loadAudit(reset = true) {
