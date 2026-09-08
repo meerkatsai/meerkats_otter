@@ -16,6 +16,7 @@ import {
 
 const dir = fileURLToPath(new URL("./schemas/", import.meta.url));
 const indexHtml = readFileSync(fileURLToPath(new URL("./public/index.html", import.meta.url)), "utf8");
+const dslReferenceYaml = readFileSync(fileURLToPath(new URL("./schemas/dsl-reference.yaml", import.meta.url)), "utf8");
 
 // Load every *.schema.json, register in ajv, and index by $id path.
 const ajv = new Ajv2020({ allErrors: true, strict: false });
@@ -40,6 +41,10 @@ app.get("/healthz", async () => ({ ok: true, schemas: Object.keys(byPath).length
 // Small read-only dashboard for browsing audit/trace data and testing
 // /validate — served directly by this service (same-origin, no CORS needed).
 app.get("/", async (req, reply) => reply.type("text/html").send(indexHtml));
+
+// Human-readable YAML companion to the JSON schemas — documentation only,
+// never validated against (see the file's own header comment).
+app.get("/schemas/dsl-reference.yaml", async (req, reply) => reply.type("text/yaml; charset=utf-8").send(dslReferenceYaml));
 
 // Serve each schema at its canonical $id path so cross-file $refs resolve over HTTP.
 app.get("/schemas/:family/v1.json", async (req, reply) => {

@@ -43,7 +43,7 @@
             <th class="whitespace-nowrap px-3 py-2 font-medium">action</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">entity</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">user_query</th>
-            <th class="whitespace-nowrap px-3 py-2 font-medium">query</th>
+            <th class="whitespace-nowrap px-3 py-2 font-medium">query <button id="query-ref-link" class="mono font-normal text-blue-600 underline decoration-dotted hover:text-blue-800" title="open the readable DSL reference">(?)</button></th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">type</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">trace</th>
             <th class="whitespace-nowrap px-3 py-2 font-medium">hash</th>
@@ -310,20 +310,33 @@ async function verifyChain() {
     : `<span class="${tagClass("bad")}">BROKEN at seq ${r.broke_at}: ${esc(r.reason)}</span>`;
 }
 
-const SCHEMA_FAMILIES = ["task-router", "query_and_act", "diagnose_and_recommend", "audit-log", "task-trace"];
+const SCHEMA_ENTRIES = [
+  { label: "task-router/v1.json", url: "/schemas/task-router/v1.json", kind: "json" },
+  { label: "query_and_act/v1.json", url: "/schemas/query_and_act/v1.json", kind: "json" },
+  { label: "diagnose_and_recommend/v1.json", url: "/schemas/diagnose_and_recommend/v1.json", kind: "json" },
+  { label: "audit-log/v1.json", url: "/schemas/audit-log/v1.json", kind: "json" },
+  { label: "task-trace/v1.json", url: "/schemas/task-trace/v1.json", kind: "json" },
+  { label: "dsl-reference.yaml (readable)", url: "/schemas/dsl-reference.yaml", kind: "yaml" },
+];
 
 async function loadSchemaList() {
-  $("#schema-list").innerHTML = SCHEMA_FAMILIES.map((f) =>
-    `<div class="schema-item cursor-pointer rounded-lg border border-gray-200 bg-white px-4 py-2.5 hover:border-gray-300" data-family="${f}">
-      <div class="mono font-semibold">${f}/v1.json</div>
+  $("#schema-list").innerHTML = SCHEMA_ENTRIES.map((e, i) =>
+    `<div class="schema-item cursor-pointer rounded-lg border border-gray-200 bg-white px-4 py-2.5 hover:border-gray-300" data-index="${i}">
+      <div class="mono font-semibold">${esc(e.label)}</div>
       <div class="text-xs text-gray-400">click to view</div>
     </div>`
   ).join("");
-  $$(".schema-item").forEach((el) => el.addEventListener("click", () => viewSchema(el.dataset.family)));
+  $$(".schema-item").forEach((el) => el.addEventListener("click", () => viewSchema(SCHEMA_ENTRIES[el.dataset.index])));
 }
 
-async function viewSchema(family) {
-  const s = await fetch(`/schemas/${family}/v1.json`).then((x) => x.json());
+async function viewSchema(entry) {
+  if (entry.kind === "yaml") {
+    const text = await fetch(entry.url).then((r) => r.text());
+    $("#schema-view").classList.remove("hidden");
+    $("#schema-view").textContent = text;
+    return;
+  }
+  const s = await fetch(entry.url).then((x) => x.json());
   $("#schema-view").classList.remove("hidden");
   $("#schema-view").textContent = JSON.stringify(s, null, 2);
 }
@@ -351,12 +364,21 @@ $("#trace-more").addEventListener("click", () => loadTraces(false));
 $("#validate-btn").addEventListener("click", runValidate);
 $("#tenant").addEventListener("keydown", (e) => { if (e.key === "Enter") { loadAudit(); loadTraces(); } });
 
-$$("nav button").forEach((btn) => btn.addEventListener("click", () => {
+function switchPanel(name) {
   $$("nav button").forEach((b) => b.className = "nav-btn rounded-md px-3 py-1.5 text-sm font-medium text-gray-500 hover:text-gray-900");
-  btn.className = "nav-btn rounded-md px-3 py-1.5 text-sm font-medium bg-gray-100 text-gray-900";
+  const btn = $(`nav button[data-panel="${name}"]`);
+  if (btn) btn.className = "nav-btn rounded-md px-3 py-1.5 text-sm font-medium bg-gray-100 text-gray-900";
   $$(".panel").forEach((p) => p.classList.add("hidden"));
-  $("#panel-" + btn.dataset.panel).classList.remove("hidden");
-}));
+  $("#panel-" + name).classList.remove("hidden");
+}
+
+$$("nav button").forEach((btn) => btn.addEventListener("click", () => switchPanel(btn.dataset.panel)));
+
+// Jump straight to the readable DSL reference from the Audit tab.
+$("#query-ref-link").addEventListener("click", () => {
+  switchPanel("schemas");
+  viewSchema(SCHEMA_ENTRIES.find((e) => e.kind === "yaml"));
+});
 
 health();
 loadAudit();
