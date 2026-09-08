@@ -35,6 +35,9 @@
   </div>
 
   <section id="panel-audit" class="panel">
+    <div class="mb-2 flex justify-end">
+      <button id="expand-all-btn" class="rounded-md border border-gray-300 bg-white px-3 py-1 text-xs font-medium hover:bg-gray-50">Expand all query_json/query_yaml</button>
+    </div>
     <div class="overflow-x-auto rounded-lg border border-gray-200 bg-white">
       <table class="w-full text-left text-xs">
         <thead class="border-b border-gray-200 bg-gray-50 text-gray-500">
@@ -271,17 +274,15 @@ async function openTraceModal(traceId) {
 
 // The task router's emitted JSON — already stored in task_ref for every
 // audit row. Expands in place under the summary instead of a modal, so you
-// keep your place in the table.
-function toggleQueryExpand(cell) {
+// keep your place in the table. Split into expand/collapse (rather than
+// one toggle) so "expand all" can drive every cell to a target state
+// without accidentally re-collapsing ones already open.
+const isQueryExpanded = (cell) => !!cell.querySelector(".query-full");
+
+function expandQueryCell(cell) {
+  if (isQueryExpanded(cell)) return;
   const summaryEl = cell.querySelector(".query-summary");
   const arrowEl = cell.querySelector(".query-arrow");
-  const existing = cell.querySelector(".query-full");
-  if (existing) {
-    existing.remove();
-    summaryEl.classList.add("truncate");
-    arrowEl.textContent = "▸";
-    return;
-  }
   const entry = auditTaskRefs.get(cell.dataset.eventId);
   const kind = cell.dataset.kind; // "json" | "yaml"
   summaryEl.classList.remove("truncate");
@@ -312,6 +313,41 @@ function toggleQueryExpand(cell) {
   }
   cell.appendChild(pre);
 }
+
+function collapseQueryCell(cell) {
+  const existing = cell.querySelector(".query-full");
+  if (!existing) return;
+  existing.remove();
+  cell.querySelector(".query-summary").classList.add("truncate");
+  cell.querySelector(".query-arrow").textContent = "▸";
+}
+
+function toggleQueryExpand(cell) {
+  isQueryExpanded(cell) ? collapseQueryCell(cell) : expandQueryCell(cell);
+}
+
+// Global "expand all / collapse all" for every query_json + query_yaml
+// cell currently in the table — one click instead of expanding each
+// row/column individually. Newly loaded rows (Load more, or a fresh
+// tenant Load) pick up the current expanded state automatically, see
+// loadAudit() below.
+let allQueryExpanded = false;
+
+function setAllQueryCellsExpanded(expand) {
+  document.querySelectorAll(".query-cell").forEach((cell) =>
+    expand ? expandQueryCell(cell) : collapseQueryCell(cell)
+  );
+}
+
+function toggleAllQueryCells() {
+  allQueryExpanded = !allQueryExpanded;
+  setAllQueryCellsExpanded(allQueryExpanded);
+  $("#expand-all-btn").textContent = allQueryExpanded
+    ? "Collapse all query_json/query_yaml"
+    : "Expand all query_json/query_yaml";
+}
+
+$("#expand-all-btn").addEventListener("click", toggleAllQueryCells);
 
 // user_query is plain text (no nested JSON) — just toggles truncation,
 // wrapping the full string in place instead of ellipsis-cutting it.
@@ -345,6 +381,7 @@ async function loadAudit(reset = true) {
   auditCursor = r.next_cursor;
   $("#audit-more").classList.toggle("hidden", auditCursor == null);
   $("#audit-empty").classList.toggle("hidden", $("#audit-rows").children.length > 0);
+  if (allQueryExpanded) setAllQueryCellsExpanded(true); // keep newly loaded rows in sync
 }
 
 // trace_id -> query_yaml, populated as trace pages load (mirrors
