@@ -210,7 +210,12 @@ function auditRowHtml(row) {
     <td class="${TD} mono text-gray-400">${fmtTime(row.recorded_at)}</td>
     <td class="${TD}"><span class="${tagClass()}">${esc(row.action)}</span></td>
     <td class="${TD} mono">${esc(entity)}</td>
-    <td class="${TD} max-w-[220px] truncate">${row.user_query ? esc(row.user_query) : '<span class="text-gray-300">—</span>'}</td>
+    <td class="${TD}">${row.user_query
+      ? `<button class="uq-toggle flex items-start gap-1 text-left hover:text-gray-900">
+           <span class="uq-arrow text-gray-400">▸</span>
+           <span class="uq-text max-w-[220px] truncate">${esc(row.user_query)}</span>
+         </button>`
+      : '<span class="text-gray-300">—</span>'}</td>
     <td class="${TD} mono">${row.task_ref
       ? `<div class="query-cell" data-event-id="${esc(row.event_id)}">
            <button class="query-toggle flex items-start gap-1 text-left text-blue-600 hover:text-blue-800">
@@ -273,6 +278,16 @@ function toggleQueryExpand(cell) {
   cell.appendChild(pre);
 }
 
+// user_query is plain text (no nested JSON) — just toggles truncation,
+// wrapping the full string in place instead of ellipsis-cutting it.
+function toggleUserQueryExpand(btn) {
+  const textEl = btn.querySelector(".uq-text");
+  const arrowEl = btn.querySelector(".uq-arrow");
+  const expanded = !textEl.classList.contains("truncate");
+  textEl.classList.toggle("truncate", expanded);
+  arrowEl.textContent = expanded ? "▸" : "▾";
+}
+
 $("#detail-modal-close").addEventListener("click", closeDetailModal);
 $("#detail-modal").addEventListener("click", (e) => { if (e.target.id === "detail-modal") closeDetailModal(); });
 $("#audit-rows").addEventListener("click", (e) => {
@@ -280,6 +295,8 @@ $("#audit-rows").addEventListener("click", (e) => {
   if (traceBtn) return openTraceModal(traceBtn.dataset.traceId);
   const queryToggle = e.target.closest(".query-toggle");
   if (queryToggle) return toggleQueryExpand(queryToggle.closest(".query-cell"));
+  const uqToggle = e.target.closest(".uq-toggle");
+  if (uqToggle) return toggleUserQueryExpand(uqToggle);
 });
 
 async function loadAudit(reset = true) {
