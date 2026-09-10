@@ -1,0 +1,292 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meerkats.ai/schemas/workflows_and_automations/v1.json",
+  "title": "Meerkats workflows_and_automations v1 — standing alert + workflow + standing-config lifecycle",
+  "description": "The agentic standing-process family. alert is standing and READ-ONLY: it never mutates and never needs approval; delivery is slack or email ONLY (notify_channel). workflow is standing and WRITE: the only autonomous mutator — each step mutates through the SAME selection_request + operation vocabulary as a standalone action. DETERMINISM CONTRACT: the agent emits operations, never tools — the server-side binder resolves each step to an exact tool chain from the capability registry (capability-registry/v1) at CONFIG CREATION (tool_binding); no binding => fail closed at creation. APPROVAL CONTRACT: a workflow standing_config cannot be registered without approval_ref, and a workflow_run cannot exist without approval_ref — approved first, act second, structurally. Server-produced artifacts: standing_config (audit config_* target), tool_binding, workflow_run (idempotency keys + per-call verify + rollback), alert_firing (alerts never enter the audit log — this is their record). Cross-file $refs point at https://meerkats.ai/schemas/query_and_act/v1.json — both must be registered in the validator.",
+
+  "oneOf": [
+    { "$ref": "#/$defs/alert_task" },
+    { "$ref": "#/$defs/workflow_task" }
+  ],
+
+  "$defs": {
+
+    "evaluate_every": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "unit"],
+      "description": "How often a standing condition is re-evaluated. Server may clamp to platform sync cadence — evaluating faster than data lands only re-reads the same numbers.",
+      "properties": {
+        "value": { "type": "integer", "minimum": 1 },
+        "unit": { "type": "string", "enum": ["minute", "hour", "day"] }
+      }
+    },
+
+    "notify_channel": {
+      "type": "object",
+      "description": "Alert delivery surface. slack and email are the ONLY channels. Delivery tools + retry/fallback live in the capability registry (notify.slack_post falls back to notify.email_send).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "required": ["type", "channel"],
+          "properties": {
+            "type": { "const": "slack" },
+            "channel": { "type": "string", "description": "Slack channel id or #name the workspace's bot posts to (chat.postMessage)" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["type", "to"],
+          "properties": {
+            "type": { "const": "email" },
+            "to": { "type": "array", "minItems": 1, "items": { "type": "string", "format": "email" } }
+          }
+        }
+      ]
+    },
+
+    "notify": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channels"],
+      "properties": {
+        "channels": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/notify_channel" } }
+      }
+    },
+
+    "alert_task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "task_type", "task"],
+      "description": "Standing, read-only. Never mutates, never needs approval. condition reuses metric_predicate — the same vocabulary a query's having clause speaks.",
+      "properties": {
+        "version": { "const": "1.0" },
+        "task_type": { "const": "alert" },
+        "task": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["entity", "conditions", "notify"],
+          "properties": {
+            "entity": { "type": "string" },
+            "conditions": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "https://meerkats.ai/schemas/query_and_act/v1.json#/$defs/metric_predicate" },
+              "description": "ANDed, same style as where/having — the alert fires when ALL hold (e.g. creative fatigue: frequency > 3 AND ctr_7d_change_pct < -20). Baseline-relative triggers stay plain predicates over DERIVED metrics the semantic layer mints (spend_dod_change_pct, hours_to_zero — contracts/config/primitives.yaml derived_alert_metrics); the schema never grows comparison logic."
+            },
+            "time_window": { "$ref": "https://meerkats.ai/schemas/query_and_act/v1.json#/$defs/time_range" },
+            "evaluate_every": { "$ref": "#/$defs/evaluate_every" },
+            "notify": { "$ref": "#/$defs/notify" }
+          }
+        }
+      }
+    },
+
+    "trigger": {
+      "type": "object",
+      "description": "What starts a workflow run: a schedule, or a named platform/system event.",
+      "oneOf": [
+        {
+          "required": ["schedule"],
+          "additionalProperties": false,
+          "properties": { "schedule": { "type": "string", "enum": ["hourly", "daily", "weekly"] } }
+        },
+        {
+          "required": ["event"],
+          "additionalProperties": false,
+          "properties": { "event": { "type": "string" } }
+        }
+      ]
+    },
+
+    "workflow_step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["select", "operation"],
+      "description": "A mutating step. select resolves to a fresh snapshot at run time; operation executes against it under the same on_drift/approval rules as a standalone action. The step carries a selection_request, never a resolved_selection — freezing happens per run, server-side.",
+      "properties": {
+        "select": { "$ref": "https://meerkats.ai/schemas/query_and_act/v1.json#/$defs/selection_request" },
+        "operation": { "$ref": "https://meerkats.ai/schemas/query_and_act/v1.json#/$defs/operation" },
+        "on_drift": { "type": "string", "enum": ["proceed", "abort", "re_approve"], "default": "re_approve" }
+      }
+    },
+
+    "workflow_task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "task_type", "task"],
+      "description": "Standing, WRITE. The only autonomous mutator. Every run is audited with actor.kind=workflow and on_behalf_of naming the human who approved the config — that pairing is what makes an unattended mutation non-repudiable (audit-log/v1).",
+      "properties": {
+        "version": { "const": "1.0" },
+        "task_type": { "const": "workflow" },
+        "task": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["trigger", "steps"],
+          "properties": {
+            "trigger": { "$ref": "#/$defs/trigger" },
+            "steps": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/workflow_step" }
+            }
+          }
+        }
+      }
+    },
+
+    "standing_config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["config_id", "status", "task", "created_at", "created_by"],
+      "description": "SERVER-PRODUCED registration of a standing task. This is what the audit log's config_created/updated/paused/deleted actions point at (subject.config_ref = config_id). The embedded task is immutable per version: config_updated writes a new version_seq, and the audit chain holds the history — a running workflow always cites the exact version it ran under.",
+      "properties": {
+        "config_id": { "type": "string", "format": "uuid" },
+        "status": { "type": "string", "enum": ["active", "paused", "deleted"] },
+        "task": {
+          "oneOf": [
+            { "$ref": "#/$defs/alert_task" },
+            { "$ref": "#/$defs/workflow_task" }
+          ],
+          "description": "the standing definition as validated at creation time"
+        },
+        "version_seq": { "type": "integer", "minimum": 1, "description": "increments on config_updated; 1 at creation" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "created_by": { "type": "string", "description": "principal_ref of the human who created it; becomes actor.on_behalf_of in audit events for autonomous runs" },
+        "approval_ref": { "type": "string", "description": "audit event_id of the approval that authorized a WORKFLOW config (mutating configs require approval per policy; alert configs don't)" },
+        "next_run_at": { "type": "string", "format": "date-time", "description": "server-computed from trigger/evaluate_every" },
+        "last_run_at": { "type": "string", "format": "date-time" },
+        "tool_binding": { "$ref": "#/$defs/tool_binding" }
+      },
+      "allOf": [
+        {
+          "description": "a WORKFLOW config mutates unattended — it cannot be registered without the approval that authorizes it, and without its tool binding (which is where an unbindable operation, e.g. any campaign.* on flipkart, fails closed at creation).",
+          "if": { "properties": { "task": { "properties": { "task_type": { "const": "workflow" } }, "required": ["task_type"] } }, "required": ["task"] },
+          "then": { "required": ["approval_ref", "tool_binding"] }
+        }
+      ]
+    },
+
+    "tool_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registry_version", "steps"],
+      "description": "SERVER-PRODUCED at config creation. The BINDER resolves each step's (platform, entity, operation) through the capability registry's operation_bindings into an exact ordered tool chain — the agent never sees the registry and never chooses a tool. A step with no binding rejects the config at creation time (fail closed), never at run time.",
+      "properties": {
+        "registry_version": { "type": "integer", "minimum": 1, "description": "capability-registry meta.version the binding was resolved against" },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["step_index", "platform", "tool_chain"],
+            "properties": {
+              "step_index": { "type": "integer", "minimum": 0 },
+              "platform": { "type": "string" },
+              "operation_key": { "type": "string", "description": "the registry binding key used, e.g. campaign.pause" },
+              "tool_chain": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "ordered tool_ids; reads may precede the mutation (increase_budget = read -> compute -> set)" }
+            }
+          }
+        }
+      }
+    },
+
+    "workflow_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "config_ref", "config_version_seq", "approval_ref", "started_at", "steps"],
+      "description": "SERVER-PRODUCED record of one workflow execution. approval_ref is REQUIRED — structurally, an unapproved run cannot exist: it cites the standing approval on the config (within validity) or the run-level re-approval after drift (on_drift=re_approve). Every mutating tool call carries an idempotency_key and is followed by its verify read; verify failure triggers the registry's rollback_tool if reversible, else escalation. Each mutating step is also audited (audit-log/v1, actor.kind=workflow).",
+      "properties": {
+        "run_id": { "type": "string", "format": "uuid" },
+        "config_ref": { "type": "string", "description": "= standing_config.config_id" },
+        "config_version_seq": { "type": "integer", "minimum": 1, "description": "the exact config version this run executed" },
+        "approval_ref": { "type": "string", "description": "audit event_id of the approval_granted that authorizes this run" },
+        "trigger_fired": { "type": "string", "description": "schedule tick or event name that started the run" },
+        "started_at": { "type": "string", "format": "date-time" },
+        "ended_at": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["running", "ok", "partial", "error", "rolled_back", "awaiting_approval", "aborted_on_drift"] },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["step_index", "tool_calls"],
+            "properties": {
+              "step_index": { "type": "integer", "minimum": 0 },
+              "selection_ref": { "type": "string", "format": "uuid", "description": "the resolved_selection frozen for THIS run (selection resolves fresh per run, server-side)" },
+              "tool_calls": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["tool_id", "status"],
+                  "properties": {
+                    "tool_id": { "type": "string", "description": "from the config's tool_binding — never chosen at run time" },
+                    "idempotency_key": { "type": "string", "description": "config_id:run_id:step:member — mandatory on mutating calls; a retry can never double-apply" },
+                    "status": { "type": "string", "enum": ["ok", "error", "skipped", "rolled_back"] },
+                    "verify": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["result"],
+                      "properties": {
+                        "result": { "type": "string", "enum": ["pass", "fail", "skipped"] },
+                        "detail": { "type": "string" }
+                      }
+                    },
+                    "error": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["code", "message"],
+                      "properties": { "code": { "type": "string" }, "message": { "type": "string" } }
+                    }
+                  }
+                }
+              },
+              "outcome": { "type": "string", "enum": ["ok", "partial", "error", "rolled_back", "skipped"] }
+            }
+          }
+        }
+      }
+    },
+
+    "alert_firing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["firing_id", "config_ref", "fired_at", "conditions", "observed"],
+      "description": "SERVER-PRODUCED record of one alert trigger. Alerts are read-only, so they never enter the audit log (audit is scoped to mutation) — this artifact, cited from the task-trace, is their record. It also encodes the never-bare contract: a firing carries the observed values AND the prefilled drill-down query the notification lands on.",
+      "properties": {
+        "firing_id": { "type": "string", "format": "uuid" },
+        "config_ref": { "type": "string", "description": "= standing_config.config_id" },
+        "fired_at": { "type": "string", "format": "date-time" },
+        "conditions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "https://meerkats.ai/schemas/query_and_act/v1.json#/$defs/metric_predicate" },
+          "description": "echo of the config's conditions as evaluated at fire time"
+        },
+        "observed": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["values"],
+          "description": "what the evaluation actually saw — the evidence behind the firing",
+          "properties": {
+            "values": { "type": "object", "additionalProperties": { "type": "number" }, "description": "named scalars, e.g. { spend: 12400, daily_budget: 10000 }" },
+            "data_as_of": { "type": "string", "format": "date-time" }
+          }
+        },
+        "drill_down": {
+          "$ref": "https://meerkats.ai/schemas/query_and_act/v1.json#/$defs/query_task",
+          "description": "the prefilled query the notification links to — an alert is never bare"
+        },
+        "notified": { "$ref": "#/$defs/notify" },
+        "delivery_status": { "type": "string", "enum": ["sent", "sent_via_fallback", "failed"], "description": "slack failure retries then falls back to email (registry notify.slack_post.delivery); failed surfaces in-app" },
+        "dedupe_key": { "type": "string", "description": "same key within cooldown => suppressed duplicate, no second notification" },
+        "cooldown_until": { "type": "string", "format": "date-time" },
+        "suppressed_reason": { "type": "string", "description": "set when the firing was withheld, e.g. sync_staleness_active (never alert on stale data as if current) or partial_scrape_run" }
+      }
+    }
+  }
+}

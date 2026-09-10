@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meerkats.ai/schemas/capability-registry/v1.json",
+  "title": "Meerkats Capability Registry v1 — declarative tool catalog + operation bindings",
+  "description": "The action inventory (architecture Concern 3). Declarative, not imperative: each tool names a real platform API call, whether it mutates, whether and how it rolls back, and which read verifies it. The agent NEVER consumes this registry — operation_bindings is consulted by the server-side BINDER, which resolves (platform, entity, operation) into an exact tool chain at config-creation/plan time. An operation with no binding on a platform fails closed at creation (e.g. every campaign.* on flipkart — no public ads API). Mutating tools execute only inside an approved execution_plan (query_and_act/v1) or approved workflow_run (workflows_and_automations/v1), always with an idempotency key, always followed by their verify read.",
+
+  "$ref": "#/$defs/registry",
+
+  "$defs": {
+
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^_": {} },
+      "$comment": "underscore-prefixed keys (_doc, _source) are format-mirror metadata (ci/mirror.py) — permitted, ignored",
+      "required": ["meta", "operation_bindings", "tools"],
+      "properties": {
+        "meta": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["version"],
+          "properties": {
+            "version": { "type": "integer", "minimum": 1 },
+            "researched": { "type": "string", "format": "date" },
+            "execution_contract": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "operation_bindings": {
+          "type": "object",
+          "description": "platform -> '<entity>.<operation>' -> ordered tool chain (tool_ids). The binder's lookup table; reads may precede a mutation (e.g. increase_budget = read current -> compute -> set).",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "tools": {
+          "type": "object",
+          "description": "tool_id -> definition. tool_id convention: <platform>.<verb_object>",
+          "additionalProperties": { "$ref": "#/$defs/tool" }
+        }
+      }
+    },
+
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api", "mutating"],
+      "properties": {
+        "api": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "method", "path", "api_version"],
+          "properties": {
+            "provider": { "type": "string", "description": "adapter key, e.g. amazon_ads, meta_graph, google_ads, flipkart_seller, shopify_admin, slack, email_adapter" },
+            "method": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+            "path": { "type": "string" },
+            "api_version": { "type": ["string", "number"], "description": "PINNED. Google ships monthly with ~1yr sunsets — track sunset dates per pin." },
+            "content_type": { "type": "string", "description": "e.g. Amazon's versioned application/vnd.spCampaign.v3+json" },
+            "doc": { "type": "string", "description": "official documentation URL the definition was verified against" }
+          }
+        },
+        "params": { "type": "string", "description": "human-readable payload sketch; the adapter owns the exact serialization" },
+        "mutating": { "type": "boolean", "description": "true => approval + idempotency_key + verify are all mandatory at execution" },
+        "idempotent": { "type": "boolean", "description": "true when re-sending the same payload is a no-op (absolute state sets are; relative adjustments are NOT)" },
+        "reversible": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reversible"],
+          "properties": {
+            "reversible": { "type": "boolean" },
+            "rollback_tool": { "type": "string", "description": "tool_id that undoes this call, replaying the captured before-value" }
+          }
+        },
+        "verify": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tool", "assert"],
+          "description": "the read-back that confirms the mutation landed (Act -> Observe -> Verify). Verify failure triggers rollback if reversible, else escalation.",
+          "properties": {
+            "tool": { "type": "string", "description": "tool_id of the read" },
+            "assert": { "type": "string", "description": "the condition checked against the read-back" }
+          }
+        },
+        "delivery": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "notification tools only: retry count and fallback channel",
+          "properties": {
+            "retry": { "type": "integer", "minimum": 0 },
+            "fallback": { "type": ["string", "null"], "description": "tool_id tried when this channel fails; null = terminal" }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "description": "a mutating tool must declare reversibility and its verify read",
+          "if": { "properties": { "mutating": { "const": true } }, "required": ["mutating"] },
+          "then": { "required": ["reversible", "verify"] }
+        }
+      ]
+    }
+  }
+}
