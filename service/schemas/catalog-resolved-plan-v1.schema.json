@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meerkats.ai/schemas/catalog_resolved_plan/v1.json",
+  "title": "Meerkats Catalog Resolved Plan v1 — the semantic-catalog layer's output contract",
+  "description": "The JSON the catalog resolver (meerkats-catalog resolve.mjs) hands back for a routed task — the interface between the semantic-catalog (RDF) layer and everything that consumes it (agent planners, the service, evidence queries). Field names are exactly the resolver's; nothing here invents vocabulary. The graph side of this layer is contracted separately: shapes.ttl (SHACL) governs the TTL, verify.py proves catalog.json ≡ TTL; THIS schema governs what crosses the layer boundary at question time. Honesty rules are structural: resolved:true requires at least one plan and an empty unresolved; resolved:false requires no plans and at least one stated reason; a non-fanout response carries at most one plan and an empty not_available_on. A refusal is a success, not a failure — it must arrive as unresolved[] entries with a why, never as a silent empty response.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "build_id", "resolved", "fanout", "plans", "not_available_on", "caveats", "notes", "unresolved"],
+  "properties": {
+    "version": {
+      "const": 1,
+      "description": "catalog format version (integer, from catalog.json)"
+    },
+    "build_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{12}$",
+      "description": "hash of all four build inputs — says exactly which catalog produced this plan"
+    },
+    "resolved": {"type": "boolean"},
+    "fanout": {
+      "type": "boolean",
+      "description": "true when a platform-less request was split into per-platform plans (e.g. product = advertised_asin on amazon, fsn_id on flipkart)"
+    },
+    "plans": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/plan"},
+      "description": "always an array — one entry for a normal query, several when fanned out — so the consumer has a single shape to handle"
+    },
+    "not_available_on": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["platform", "why"],
+        "properties": {
+          "platform": {"type": "string"},
+          "why": {"type": "string"}
+        }
+      },
+      "description": "fanout only: platforms that cannot answer at this grain, each with the stated reason"
+    },
+    "caveats": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "text"],
+        "properties": {
+          "id": {"type": "string", "description": "caveat key in the catalog (e.g. fanout_not_totalled)"},
+          "severity": {"type": "string", "enum": ["blocker", "warning"]},
+          "text": {"type": "string"}
+        }
+      },
+      "description": "things that change how the result must be read; blocker caveats must surface with the answer"
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["metric", "note"],
+        "properties": {
+          "metric": {"type": "string", "description": "the metric as asked"},
+          "note": {"type": "string", "description": "binding note, e.g. why a substitute metric was chosen"}
+        }
+      }
+    },
+    "unresolved": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "what", "name", "why"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["bug", "parked", "refusal", "broken"],
+            "description": "bug: catalog/request defect. parked: recognised, data not ingested. refusal: correctly unanswerable, reason stated. broken: metric's model references a missing column"
+          },
+          "what": {
+            "type": "string",
+            "enum": ["entity", "dimension", "metric", "combination", "group_by"]
+          },
+          "name": {"type": "string"},
+          "why": {"type": "string"}
+        }
+      },
+      "description": "non-empty means the task fails BEFORE any generation is paid for — with reasons, never silently"
+    }
+  },
+  "$defs": {
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "layer", "semantic_model", "table", "metrics", "group_by", "time_dimension", "grain", "time_asked"],
+      "description": "One executable metric plan: which MetricFlow metric to call, on which semantic model, grouped by what. The consumer executes this verbatim — it never re-chooses a metric.",
+      "properties": {
+        "platform": {
+          "type": ["string", "null"],
+          "description": "null = not platform-scoped (or multi-platform)"
+        },
+        "layer": {"const": "semantic"},
+        "semantic_model": {"type": ["string", "null"]},
+        "table": {"type": ["string", "null"]},
+        "metrics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["asked", "use", "why"],
+            "properties": {
+              "asked": {"type": "string", "description": "the word the task said (roas, roi, spend…)"},
+              "use": {"type": "string", "description": "the MetricFlow metric to actually call"},
+              "why": {"type": ["string", "null"], "description": "stated when use ≠ the obvious mapping (e.g. platform_reported_roas because roas is cross-model)"}
+            }
+          }
+        },
+        "group_by": {"type": "array", "items": {"type": "string"}},
+        "time_dimension": {"type": ["string", "null"]},
+        "grain": {"type": ["string", "null"], "description": "the model's finest grain (day, month, …)"},
+        "time_asked": {"type": "boolean", "description": "true when the task asked for the time dimension itself"}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "description": "a resolved response must carry at least one plan and no unresolved entries",
+      "if": {"properties": {"resolved": {"const": true}}, "required": ["resolved"]},
+      "then": {"properties": {"plans": {"minItems": 1}, "unresolved": {"maxItems": 0}}}
+    },
+    {
+      "description": "an unresolved response must carry no plans and at least one stated reason",
+      "if": {"properties": {"resolved": {"const": false}}, "required": ["resolved"]},
+      "then": {"properties": {"plans": {"maxItems": 0}, "unresolved": {"minItems": 1}}}
+    },
+    {
+      "description": "a non-fanout response has at most one plan and nothing in not_available_on",
+      "if": {"properties": {"fanout": {"const": false}}, "required": ["fanout"]},
+      "then": {"properties": {"plans": {"maxItems": 1}, "not_available_on": {"maxItems": 0}}}
+    }
+  ]
+}
