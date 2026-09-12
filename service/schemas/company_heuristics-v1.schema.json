@@ -1,0 +1,336 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meerkats.ai/schemas/company_heuristics/v1.json",
+  "title": "Meerkats Company Heuristics v1 — the per-workspace knowledge contract",
+  "description": "One document per workspace (client): who they are, where they advertise, how each platform account is actually set up, who may do what, how PII must be handled, what currency they think in, and how the brand speaks. The client-side counterpart of platform_heuristics: platform packs carry what is true of a PLATFORM for everyone; this carries what is true of THIS workspace. Consumers: the resolver scopes every query by workspace_id; recommendation/simulation read platform_setup.targets (e.g. the account's target ACOS the amazon diagnostics pack references); the approval queue routes by approval_routing against execution_plan risk_level; report/creative surfaces obey pii_requirements and brand_guidelines. Platform names are the same five keys used everywhere (amazon, flipkart, google, meta, shopify) — never new spellings. Cross-field rules a JSON Schema cannot express, for the consumer to enforce: every platform_setup key must be declared in platforms; every approval_routing role must exist in roles_and_permissions.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "workspace_id",
+    "company",
+    "platforms",
+    "platform_setup",
+    "roles_and_permissions",
+    "pii_requirements",
+    "currency",
+    "brand_guidelines"
+  ],
+  "properties": {
+    "version": {
+      "const": "1.0"
+    },
+    "workspace_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "THE tenant key — every query, alert, action and scrape is scoped WHERE workspace_id = this. Runtime-injected everywhere else; this document is where it is declared. Placeholder slugs (e.g. areoveda) are allowed until the real workspace UUID is set."
+    },
+    "company": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "legal_name": {
+          "type": "string"
+        },
+        "website": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    },
+    "platforms": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ads"
+      ],
+      "description": "Where this workspace actually runs. A platform not listed here must be refused, not guessed — same fail-closed rule as everywhere else.",
+      "properties": {
+        "ads": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "amazon",
+              "flipkart",
+              "google",
+              "meta"
+            ]
+          }
+        },
+        "commerce": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "shopify"
+            ]
+          }
+        }
+      }
+    },
+    "platform_setup": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "enum": [
+          "amazon",
+          "flipkart",
+          "google",
+          "meta",
+          "shopify"
+        ]
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/platform_setup_entry"
+      },
+      "description": "How each connected platform is set up TODAY, keyed by the canonical platform name. Every key must be declared in platforms.ads or platforms.commerce."
+    },
+    "roles_and_permissions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "role",
+          "permissions"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "e.g. founder, growth_lead, media_buyer, finance, agency"
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "email"
+            }
+          },
+          "permissions": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "view_reports",
+                "run_queries",
+                "author_alerts",
+                "author_workflows",
+                "approve_actions",
+                "manage_connections",
+                "admin"
+              ],
+              "description": "vocabulary follows the task families: query/alert/workflow authoring and the approval gate that turns proposals into execution_plans"
+            }
+          }
+        }
+      }
+    },
+    "approval_routing": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Which role approves at which execution_plan risk_level (keys match contract_query_and_act risk_level exactly). Absent levels fall back to any role holding approve_actions. Every role named here must exist in roles_and_permissions.",
+      "properties": {
+        "low": {
+          "type": "string"
+        },
+        "medium": {
+          "type": "string"
+        },
+        "high": {
+          "type": "string"
+        },
+        "critical": {
+          "type": "string"
+        }
+      }
+    },
+    "pii_requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy"
+      ],
+      "description": "How this workspace's personal data must be handled in every surface (reports, exports, alerts, agent context).",
+      "properties": {
+        "policy": {
+          "type": "string",
+          "enum": [
+            "no_pii_stored",
+            "masked_in_reports",
+            "restricted_access"
+          ],
+          "description": "no_pii_stored: the pipeline must never persist PII. masked_in_reports: stored but every rendered surface masks it. restricted_access: visible only to roles listed in visible_to_roles."
+        },
+        "restricted_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "field names that count as PII here, e.g. customer phone, email, address, lead names"
+        },
+        "visible_to_roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "roles (from roles_and_permissions) that may see unmasked values; required in spirit when policy=restricted_access"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "currency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$",
+      "description": "ISO 4217, e.g. INR — the workspace's reporting currency. Platform accounts billed in another currency say so in their platform_setup entry."
+    },
+    "brand_guidelines": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "brand_name"
+      ],
+      "description": "How the brand speaks — read by any surface that writes copy or renders client-facing output.",
+      "properties": {
+        "brand_name": {
+          "type": "string",
+          "description": "exact rendering, casing included"
+        },
+        "voice": {
+          "type": "string"
+        },
+        "dos": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "donts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "prohibited_claims": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "claims that must never appear in generated copy or creative advice, e.g. medical claims for a baby-care brand"
+        },
+        "assets_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "where the brand kit lives"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "platform_setup_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "connected",
+        "account_ids"
+      ],
+      "description": "The current state of one platform account — the workspace-specific facts the platform packs cannot know.",
+      "properties": {
+        "connected": {
+          "type": "boolean",
+          "description": "false = declared but not yet wired; queries against it must say so rather than return empty"
+        },
+        "account_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "value"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "description": "the platform's own id name: profile_id (amazon), customer_id (google), ad_account_id (meta), seller_id (flipkart), store domain (shopify)"
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$",
+          "description": "only when this account bills in a currency other than the workspace currency"
+        },
+        "targets": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "the account's own efficiency settings — what recommendation/diagnosis judge against (e.g. amazon diagnostics: 'judged against the account's target ACOS setting, not a global constant')",
+          "properties": {
+            "target_acos": {
+              "type": "number"
+            },
+            "target_roas": {
+              "type": "number"
+            },
+            "target_cpa": {
+              "type": "number"
+            },
+            "monthly_budget": {
+              "type": "number",
+              "description": "in the account currency"
+            }
+          }
+        },
+        "bidding": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "bidding strategies actually in use, in the platform's own terms: dynamic_down, tROAS, SmartROI, lowest_cost… — the diagnostics packs' conditional levers key off these"
+        },
+        "budget_model": {
+          "type": "string",
+          "description": "where budget lives, in the platform's own terms: cbo | abo (meta), campaign_daily + portfolio caps (amazon), shared_budgets (google)"
+        },
+        "attribution": {
+          "type": "string",
+          "description": "the account's attribution setting as configured, e.g. '7-day click 1-day view' (meta)"
+        },
+        "naming_convention": {
+          "type": "string",
+          "description": "campaign naming scheme in use, so selections can be written against it"
+        },
+        "data_through": {
+          "type": "string",
+          "format": "date",
+          "description": "last verified ingestion date for this platform"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
