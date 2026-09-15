@@ -21,6 +21,10 @@ export const pool = new Pool({
 // hash identically to before this field existed, and the position of a
 // field within the array doesn't affect the hash anyway — canon() sorts
 // keys before serializing. New events that DO set it get it hashed too.
+// platform (migration 004) is deliberately NOT in this list: it is derived
+// server-side from task_ref (which IS hashed), so it adds no integrity —
+// tampering with the column is detectable by re-deriving it — and keeping
+// it out means every pre-004 row still verifies unchanged.
 const HASHED_FIELDS = [
   "event_id", "tenant_ref", "seq", "recorded_at", "prev_hash",
   "trace_id", "action", "actor", "subject", "risk_level",
@@ -67,14 +71,15 @@ export async function appendAudit(evt) {
         (event_id, tenant_ref, seq, recorded_at, prev_hash, hash, signature,
          trace_id, action, actor, subject, risk_level,
          task_ref, execution_plan_ref, resolved_selection_ref,
-         change, decision, outcome, user_query)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+         change, decision, outcome, user_query, platform)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
       [
         rec.event_id, rec.tenant_ref, rec.seq, rec.recorded_at, rec.prev_hash,
         rec.hash, rec.signature ?? null, rec.trace_id ?? null, rec.action,
         j(rec.actor), j(rec.subject), rec.risk_level ?? null,
         j(rec.task_ref), j(rec.execution_plan_ref), j(rec.resolved_selection_ref),
         j(rec.change), j(rec.decision), j(rec.outcome), rec.user_query ?? null,
+        rec.platform ?? null,
       ]
     );
     await client.query("COMMIT");
@@ -87,7 +92,7 @@ export async function appendAudit(evt) {
   }
 }
 
-const TRACE_COLUMNS = "trace_id, tenant_ref, task_type, status, latency_ms, output_ref, query_yaml, created_at";
+const TRACE_COLUMNS = "trace_id, tenant_ref, task_type, status, latency_ms, output_ref, query_yaml, platform, created_at";
 
 // Upsert the one-row-per-request trace summary (full span firehose goes to
 // the telemetry backend, not here — see migrations/001_init.sql).
@@ -97,15 +102,16 @@ const TRACE_COLUMNS = "trace_id, tenant_ref, task_type, status, latency_ms, outp
 // YAML instead of JSON, per row, in this table.
 export async function upsertTraceSummary(s) {
   const { rows } = await pool.query(
-    `INSERT INTO trace_summary (trace_id, tenant_ref, task_type, status, latency_ms, output_ref, query_yaml)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
+    `INSERT INTO trace_summary (trace_id, tenant_ref, task_type, status, latency_ms, output_ref, query_yaml, platform)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
      ON CONFLICT (trace_id) DO UPDATE SET
        status = EXCLUDED.status,
        latency_ms = EXCLUDED.latency_ms,
        output_ref = EXCLUDED.output_ref,
-       query_yaml = EXCLUDED.query_yaml
+       query_yaml = EXCLUDED.query_yaml,
+       platform = EXCLUDED.platform
      RETURNING ${TRACE_COLUMNS}`,
-    [s.trace_id, s.tenant_ref, s.task_type, s.status, s.latency_ms ?? null, s.output_ref ?? null, s.query_yaml ?? null]
+    [s.trace_id, s.tenant_ref, s.task_type, s.status, s.latency_ms ?? null, s.output_ref ?? null, s.query_yaml ?? null, s.platform ?? null]
   );
   return rows[0];
 }
@@ -140,7 +146,7 @@ export async function getTraceSummary(trace_id) {
 
 const AUDIT_COLUMNS = `event_id, tenant_ref, seq, recorded_at, prev_hash, hash, trace_id,
   action, actor, subject, risk_level, task_ref, execution_plan_ref,
-  resolved_selection_ref, change, decision, outcome, user_query`;
+  resolved_selection_ref, change, decision, outcome, user_query, platform`;
 
 // List a tenant's audit events, newest first, paginated on seq. Pass
 // `before` (a seq value, typically the previous page's last row) to page

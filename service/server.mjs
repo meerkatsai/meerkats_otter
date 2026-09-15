@@ -35,6 +35,21 @@ const validateTask = ajv.getSchema(routerId);
 const validateTrace = ajv.getSchema("https://meerkats.ai/schemas/task-trace/v1.json");
 const validateAuditEvent = ajv.getSchema("https://meerkats.ai/schemas/audit-log/v1.json");
 
+// Which platform(s) a task envelope targets, derived from its where clause
+// (dimension = 'platform', per query_and_act-v1 — see e.g. `where: [{dimension:
+// "platform", operator: "eq", value: "flipkart"}]`). Multi-platform `in`
+// filters join with "," so the column stays a flat text value. Returns null
+// when the envelope names no platform — the column is a convenience
+// projection, never a guess.
+function platformOf(envelope) {
+  const task = envelope?.task;
+  if (!task) return null;
+  const w = (task.where ?? []).find((c) => c?.dimension === "platform");
+  if (!w) return null;
+  if (Array.isArray(w.value)) return w.value.map(String).join(",");
+  return typeof w.value === "string" ? w.value : null;
+}
+
 const app = Fastify({ logger: true });
 
 app.get("/healthz", async () => ({ ok: true, schemas: Object.keys(byPath).length }));
@@ -84,7 +99,9 @@ app.post("/audit", async (req, reply) => {
   if (!ok) return reply.code(422).send({ valid: false, errors: validateAuditEvent.errors });
 
   try {
-    const r = await appendAudit(e);
+    // Derived, not client-supplied: the platform column always reflects the
+    // hashed task_ref, so the two can never disagree.
+    const r = await appendAudit({ ...e, platform: platformOf(e.task_ref?.inline) });
     return reply.code(201).send(r);
   } catch (err) {
     req.log.error(err);
@@ -149,6 +166,7 @@ app.post("/trace", async (req, reply) => {
       latency_ms,
       output_ref: trace.outcome?.output?.ref ?? null,
       query_yaml,
+      platform: platformOf(trace.task),
     });
     return reply.code(201).send(r);
   } catch (err) {
